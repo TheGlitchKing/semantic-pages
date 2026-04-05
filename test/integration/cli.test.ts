@@ -41,8 +41,33 @@ describe("CLI", () => {
 
   it("should show help", async () => {
     const { stdout } = await exec("node", [CLI, "--help"]);
-    expect(stdout).toContain("--notes");
-    expect(stdout).toContain("--reindex");
-    expect(stdout).toContain("--stats");
+    expect(stdout).toContain("tools");
+    expect(stdout).toContain("serve");
+  });
+
+  it("should list all tools", async () => {
+    const { stdout } = await exec("node", [CLI, "tools"]);
+    expect(stdout).toContain("21 MCP Tools");
+    expect(stdout).toContain("search_semantic");
+    expect(stdout).toContain("create_note");
+    expect(stdout).toContain("backlinks");
+    expect(stdout).toContain("reindex");
+  });
+
+  it("should show detail for a specific tool", async () => {
+    const { stdout } = await exec("node", [CLI, "tools", "update_note"]);
+    expect(stdout).toContain("update_note");
+    expect(stdout).toContain("Arguments:");
+    expect(stdout).toContain("Examples:");
+    expect(stdout).toContain("patch-by-heading");
+  });
+
+  it("should error on unknown tool name", async () => {
+    try {
+      await exec("node", [CLI, "tools", "fake_tool"]);
+      expect.unreachable("Should have exited with error");
+    } catch (err: any) {
+      expect(err.stderr || err.message).toContain("Unknown tool");
+    }
   });
 });

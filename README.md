@@ -134,8 +134,61 @@ These commands run in your terminal and manage your notes index.
 | `semantic-pages --notes <path> --stats` | Show vault statistics and exit |
 | `semantic-pages --notes <path> --reindex` | Force full reindex and exit |
 | `semantic-pages --notes <path> --no-watch` | Start server without file watcher |
+| `semantic-pages tools` | List all 21 MCP tools with descriptions |
+| `semantic-pages tools <name>` | Show arguments and examples for a specific tool |
 | `semantic-pages --version` | Show version number |
 | `semantic-pages --help` | Show all options |
+
+##### Built-in Tool Help
+
+Every MCP tool has built-in documentation accessible from the CLI:
+
+```bash
+# List all 21 tools organized by category
+semantic-pages tools
+```
+
+```
+Semantic Pages — 21 MCP Tools
+
+  Search:
+    search_semantic          Vector similarity search — find notes by meaning, not just keywords
+    search_text              Full-text keyword or regex search with optional filters
+    search_graph             Graph traversal — find notes connected to a concept via wikilinks and tags
+    search_hybrid            Combined semantic + graph search — vector results re-ranked by graph proximity
+
+  Read:
+    read_note                Read the full content of a specific note by path
+    read_multiple_notes      Batch read multiple notes in one call
+    list_notes               List all indexed notes with metadata (title, tags, link count)
+    ...
+```
+
+```bash
+# Get detailed help for a specific tool — arguments, types, and examples
+semantic-pages tools search_semantic
+```
+
+```
+  search_semantic
+  ───────────────
+  Vector similarity search — find notes by meaning, not just keywords
+
+  Arguments:
+    { "query": "string", "limit?": 10 }
+
+  Examples:
+    { "query": "microservices architecture", "limit": 5 }
+    { "query": "how to deploy to production" }
+```
+
+```bash
+# More examples
+semantic-pages tools update_note      # See all 4 editing modes
+semantic-pages tools move_note        # See wikilink-aware rename
+semantic-pages tools manage_tags      # See add/remove/list actions
+semantic-pages tools rename_tag       # See vault-wide tag rename
+```
 
 ##### Command Examples and Details
 
