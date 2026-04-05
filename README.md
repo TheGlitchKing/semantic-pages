@@ -1,25 +1,89 @@
-# semantic-pages
+# Semantic Pages
 
-Semantic search + knowledge graph MCP server for any folder of markdown files.
+> Semantic search + knowledge graph MCP server for any folder of markdown files.
 
-No Docker. No Python. No Obsidian. Just `npx`.
+[![npm version](https://img.shields.io/npm/v/@theglitchking/semantic-pages.svg)](https://www.npmjs.com/package/@theglitchking/semantic-pages)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## Install
+> [!IMPORTANT]
+> Semantic Pages runs a local embedding model (~80MB) on first launch. This download happens once and is cached at `~/.semantic-pages/models/`. No API key required. No data leaves your machine.
 
+---
+
+## Summary
+
+When you have markdown notes scattered across a project — a `vault/`, `docs/`, `notes/`, or wiki — your AI assistant can't search them by meaning, traverse their connections, or help you maintain them. Semantic Pages fixes this by indexing your markdown files into a vector database and knowledge graph, then exposing 21 MCP tools that let Claude (or any MCP-compatible client) search semantically, traverse wikilinks, manage frontmatter, and perform full CRUD operations. No Docker, no Python, no Obsidian required — just `npx`.
+
+---
+
+## Operational Summary
+
+The server indexes all `.md` files in a directory you point it at. Each file is parsed for YAML frontmatter, `[[wikilinks]]`, `#tags`, and headings. The text content is split into ~512-token chunks and embedded locally using the `nomic-embed-text-v1.5` model running via WebAssembly in Node.js. These embeddings are stored in an HNSW index for fast approximate nearest neighbor search. Simultaneously, a directed graph is built from wikilinks and shared tags using graphology.
+
+When Claude calls `search_semantic`, the query is embedded and compared against all chunks via cosine similarity. When Claude calls `search_graph`, it does a breadth-first traversal from matching nodes. `search_hybrid` combines both — semantic results re-ranked by graph proximity. Beyond search, Claude can create, read, update, delete, and move notes, manage YAML frontmatter fields, add/remove/rename tags vault-wide, and query the knowledge graph for backlinks, forwardlinks, shortest paths, and connectivity statistics.
+
+The index is stored in `.semantic-pages-index/` alongside your notes (gitignore it). A file watcher detects changes and re-indexes incrementally. Everything runs locally over stdio — no network, no server, no background processes beyond the MCP connection itself.
+
+---
+
+## Features
+
+- **Semantic Search**: Find notes by meaning, not just keywords, using local vector embeddings
+- **Knowledge Graph**: Traverse `[[wikilinks]]` and shared `#tags` as a directed graph
+- **Hybrid Search**: Combined vector + graph search with re-ranking
+- **Full-Text Search**: Keyword and regex search with path, tag, and case filters
+- **Full CRUD**: Create, read, update (overwrite/append/prepend/patch-by-heading), delete, and move notes
+- **Frontmatter Management**: Get and set YAML frontmatter fields atomically
+- **Tag Management**: Add, remove, list, and rename tags vault-wide (frontmatter + inline)
+- **Graph Queries**: Backlinks, forwardlinks, shortest path, graph statistics (orphans, density, most connected)
+- **File Watcher**: Incremental re-indexing on file changes with debounce
+- **Local Embeddings**: No API key, no network after first model download
+- **Zero Dependencies Beyond Node**: No Docker, no Python, no Obsidian, no GUI
+
+---
+
+## Quick Start
+
+### 1. Installation Methods
+
+#### Method A: NPX (No installation needed)
+
+This lets you run the server without installing it permanently.
+
+**Step 1**: Open your terminal in your project folder
+
+**Step 2**: Run:
 ```bash
-npx semantic-pages --notes ./vault
+npx semantic-pages --notes ./vault --stats
 ```
 
-Or install globally:
+**Step 3**: The first time you run it, NPX downloads the package and the embedding model (~80MB). This takes 1-2 minutes.
 
+**Step 4**: After that, it runs instantly.
+
+**Use this method when**: You want to try it out, or you're adding it to a project's `.mcp.json` config.
+
+#### Method B: Global Installation (Recommended for regular use)
+
+This installs the tool on your computer so you can use it in any project.
+
+**Step 1**: Open your terminal
+
+**Step 2**: Type this command and press Enter:
 ```bash
-npm install -g semantic-pages
-semantic-pages --notes ./vault
+npm install -g @theglitchking/semantic-pages
 ```
 
-## MCP Configuration
+**Step 3**: Test that it worked:
+```bash
+semantic-pages --version
+```
 
-Add to your `.mcp.json` (Claude Code, Cursor, etc.):
+**Step 4**: You should see a version number. If you do, it's installed correctly!
+
+#### Method C: MCP Configuration (Recommended for Claude Code)
+
+Add to your project's `.mcp.json` so Claude has automatic access:
 
 ```json
 {
@@ -32,105 +96,291 @@ Add to your `.mcp.json` (Claude Code, Cursor, etc.):
 
 Point `--notes` at any folder of `.md` files: `./vault`, `./docs`, `./notes`, or `.` for the whole repo.
 
-## What It Does
+**What to expect**: Next time you run `claude` in that project, Claude will have 21 new tools for searching, reading, writing, and traversing your notes.
 
-semantic-pages gives your AI assistant native tool access to your markdown notes via the Model Context Protocol. It replaces the Obsidian + Smart Connections + MCP plugin stack with a single npm package.
+#### Method D: Project Installation (For team projects)
 
-### 21 MCP Tools
+This installs the tool only for one specific project.
 
-**Search**
+**Step 1**: Open your terminal in your project folder
 
-| Tool | Description |
-|------|-------------|
-| `search_semantic` | Vector similarity search by meaning |
-| `search_text` | Full-text keyword/regex search with filters |
-| `search_graph` | Graph traversal via wikilinks and tags |
-| `search_hybrid` | Combined semantic + graph, re-ranked |
-
-**Read**
-
-| Tool | Description |
-|------|-------------|
-| `read_note` | Read full content of a note |
-| `read_multiple_notes` | Batch read multiple notes |
-| `list_notes` | List all notes with metadata |
-
-**Write**
-
-| Tool | Description |
-|------|-------------|
-| `create_note` | Create a new markdown note |
-| `update_note` | Edit (overwrite, append, prepend, patch by heading) |
-| `delete_note` | Delete a note (requires confirmation) |
-| `move_note` | Move/rename, updates wikilinks across vault |
-
-**Metadata**
-
-| Tool | Description |
-|------|-------------|
-| `get_frontmatter` | Read YAML frontmatter as JSON |
-| `update_frontmatter` | Set/delete frontmatter keys |
-| `manage_tags` | Add, remove, or list tags |
-| `rename_tag` | Vault-wide tag rename |
-
-**Graph**
-
-| Tool | Description |
-|------|-------------|
-| `backlinks` | Notes linking TO a given note |
-| `forwardlinks` | Notes linked FROM a given note |
-| `graph_path` | Shortest path between two notes |
-| `graph_statistics` | Most connected nodes, orphans, density |
-
-**System**
-
-| Tool | Description |
-|------|-------------|
-| `get_stats` | Vault stats (notes, chunks, embeddings, graph) |
-| `reindex` | Force full reindex |
-
-## How It Works
-
-1. **Indexes** all `.md` files: parses frontmatter, extracts `[[wikilinks]]`, `#tags`, headers
-2. **Embeds** text chunks using a local model ([nomic-embed-text-v1.5](https://huggingface.co/nomic-ai/nomic-embed-text-v1.5)) via WASM — no API key needed
-3. **Builds** a knowledge graph from wikilinks and shared tags using [graphology](https://graphology.github.io/)
-4. **Creates** an HNSW vector index for fast approximate nearest neighbor search
-5. **Watches** for file changes and re-indexes incrementally
-6. **Serves** all of this over MCP stdio protocol
-
-The index is stored in `.semantic-pages-index/` alongside your notes (gitignore it). The model is downloaded once to `~/.semantic-pages/models/`.
-
-## CLI
-
+**Step 2**: Type this command:
 ```bash
-# Start MCP server (default)
-semantic-pages --notes ./vault
+npm install --save-dev @theglitchking/semantic-pages
+```
 
-# Show vault statistics
+**Step 3**: Add a script to your `package.json` file:
+```json
+{
+  "scripts": {
+    "notes": "semantic-pages --notes ./vault",
+    "notes:stats": "semantic-pages --notes ./vault --stats",
+    "notes:reindex": "semantic-pages --notes ./vault --reindex"
+  }
+}
+```
+
+---
+
+### 2. How to Use
+
+#### CLI Commands
+
+These commands run in your terminal and manage your notes index.
+
+| Command | Description |
+|---------|-------------|
+| `semantic-pages --notes <path>` | Start MCP server (default mode) |
+| `semantic-pages --notes <path> --stats` | Show vault statistics and exit |
+| `semantic-pages --notes <path> --reindex` | Force full reindex and exit |
+| `semantic-pages --notes <path> --no-watch` | Start server without file watcher |
+| `semantic-pages --version` | Show version number |
+| `semantic-pages --help` | Show all options |
+
+##### Command Examples and Details
+
+**`--stats` - Check your vault**
+
+**How to use it**:
+```bash
 semantic-pages --notes ./vault --stats
+```
 
-# Force reindex and exit
+**When to use it**: Quick check to see what's in your vault.
+
+**What to expect**:
+```
+Notes: 47
+Chunks: 312
+Wikilinks: 89
+Tags: 23 unique
+```
+
+---
+
+**`--reindex` - Rebuild the index**
+
+**How to use it**:
+```bash
 semantic-pages --notes ./vault --reindex
-
-# Disable file watcher
-semantic-pages --notes ./vault --no-watch
 ```
 
-## As a Library
+**When to use it**:
+- After bulk-adding or modifying notes outside of the MCP tools
+- If the index seems stale or corrupted
+- After changing the embedding model
 
-```typescript
-import { Indexer, Embedder, GraphBuilder, VectorIndex } from "semantic-pages";
+**What to expect**: Full re-parse, re-embed, and re-index of all markdown files. Takes 10-60 seconds depending on vault size and whether the model is cached.
 
-const indexer = new Indexer("./vault");
-const docs = await indexer.indexAll();
+---
 
-const embedder = new Embedder();
-await embedder.init();
-const vec = await embedder.embed("search query");
+#### MCP Tools
+
+When the server is running (via `.mcp.json` or CLI), Claude has access to these 21 tools:
+
+##### Search Tools
+
+| Tool | Description |
+|------|-------------|
+| `search_semantic` | Vector similarity search — "find notes similar to this idea" |
+| `search_text` | Full-text keyword/regex search with path, tag, and case filters |
+| `search_graph` | Graph traversal — "find notes connected to this concept" |
+| `search_hybrid` | Combined — semantic results re-ranked by graph proximity |
+
+**`search_semantic` - Find notes by meaning**
+
+**When Claude uses it**: When you ask things like "find notes about deployment strategies" or "what have I written about authentication?"
+
+**What to expect**: Returns notes ranked by semantic similarity to your query, with relevance scores and text snippets. Works even if the exact words don't appear in the notes.
+
+**Example conversation**:
+```
+You: What notes do I have about scaling microservices?
+Claude: [calls search_semantic with query "scaling microservices"]
+Claude: I found 4 relevant notes:
+1. architecture/scaling-patterns.md (0.87 similarity) — discusses horizontal vs vertical scaling
+2. devops/kubernetes-autoscaling.md (0.82 similarity) — HPA and VPA configuration
+3. architecture/service-mesh.md (0.71 similarity) — mentions scaling in the context of Istio
+4. meeting-notes/2024-03-15.md (0.65 similarity) — team discussion about scaling concerns
 ```
 
-## Per-Repo Pattern
+---
 
+**`search_text` - Find exact matches**
+
+**When Claude uses it**: When you need exact keyword or regex matches, not semantic similarity.
+
+**What to expect**: Returns notes containing the exact pattern, with snippets showing context. Supports:
+- Case-sensitive/insensitive search
+- Regex patterns
+- Path glob filters (e.g., only search in `notes/`)
+- Tag filters (e.g., only search notes tagged `#architecture`)
+
+---
+
+**`search_graph` - Traverse connections**
+
+**When Claude uses it**: When you want to explore how notes are connected — "what's related to this concept?"
+
+**What to expect**: Starting from notes matching your concept, does a breadth-first traversal through wikilinks and shared tags, returning all connected notes within the specified depth.
+
+---
+
+**`search_hybrid` - Best of both**
+
+**When Claude uses it**: When you want comprehensive results — semantic matches boosted by graph proximity.
+
+**What to expect**: Semantic search results re-ranked so that notes which are also graph-connected score higher. Best for "find everything relevant to X."
+
+---
+
+##### Read Tools
+
+| Tool | Description |
+|------|-------------|
+| `read_note` | Read full content of a specific note |
+| `read_multiple_notes` | Batch read multiple notes in one call |
+| `list_notes` | List all indexed notes with metadata (title, tags, link count) |
+
+---
+
+##### Write Tools
+
+| Tool | Description |
+|------|-------------|
+| `create_note` | Create a new markdown note with optional frontmatter |
+| `update_note` | Edit note content (overwrite, append, prepend, or patch by heading) |
+| `delete_note` | Delete a note (requires explicit confirmation) |
+| `move_note` | Move/rename a note — automatically updates wikilinks across the vault |
+
+**`update_note` - Four editing modes**
+
+**Modes**:
+- `overwrite` — replace entire content
+- `append` — add to the end
+- `prepend` — add after frontmatter, before existing content
+- `patch-by-heading` — replace the content under a specific heading (preserves other sections)
+
+**Example**:
+```
+You: Add a "Rollback" section to the deployment guide
+Claude: [calls update_note with mode "patch-by-heading", heading "Rollback"]
+Claude: Updated deployment-guide.md — added Rollback section with kubectl rollback instructions.
+```
+
+---
+
+**`move_note` - Smart rename**
+
+**What makes it special**: When you move `user-service.md` to `auth-service.md`, every `[[user-service]]` wikilink in every other note gets updated to `[[auth-service]]` automatically.
+
+---
+
+##### Metadata Tools
+
+| Tool | Description |
+|------|-------------|
+| `get_frontmatter` | Read parsed YAML frontmatter as JSON |
+| `update_frontmatter` | Set or delete frontmatter keys atomically (pass `null` to delete) |
+| `manage_tags` | Add, remove, or list tags on a note (frontmatter + inline) |
+| `rename_tag` | Rename a tag across all notes in the vault |
+
+**`rename_tag` - Vault-wide tag rename**
+
+**When Claude uses it**: When you want to rename `#architecture` to `#arch` everywhere — in frontmatter `tags:` arrays and inline `#tags` across every file.
+
+**What to expect**: Returns the count of files modified.
+
+---
+
+##### Graph Tools
+
+| Tool | Description |
+|------|-------------|
+| `backlinks` | All notes that link TO a given note via `[[wikilinks]]` |
+| `forwardlinks` | All notes linked FROM a given note |
+| `graph_path` | Shortest path between two notes in the knowledge graph |
+| `graph_statistics` | Most connected nodes, orphan count, graph density |
+
+**`graph_path` - Find connections between notes**
+
+**Example conversation**:
+```
+You: How are the deployment guide and the user service connected?
+Claude: [calls graph_path from "deployment-guide.md" to "user-service.md"]
+Claude: Path: deployment-guide.md → microservices.md → user-service.md
+The deployment guide links to the microservices overview, which links to the user service.
+```
+
+---
+
+**`graph_statistics` - Vault health overview**
+
+**What to expect**:
+```json
+{
+  "totalNodes": 47,
+  "totalEdges": 89,
+  "orphanCount": 3,
+  "mostConnected": [
+    { "path": "project-overview.md", "connections": 12 },
+    { "path": "microservices.md", "connections": 9 }
+  ],
+  "density": 0.04
+}
+```
+
+---
+
+##### System Tools
+
+| Tool | Description |
+|------|-------------|
+| `get_stats` | Vault stats — total notes, chunks, embeddings, graph density, model info |
+| `reindex` | Force full reindex of the vault |
+
+---
+
+## Common Workflows
+
+### Quick Vault Check (10 seconds)
+```bash
+semantic-pages --notes ./vault --stats
+```
+
+### Adding Semantic Pages to a Project (2 minutes)
+```bash
+# Step 1: Create .mcp.json in your project root
+echo '{
+  "semantic-pages": {
+    "command": "npx",
+    "args": ["-y", "semantic-pages", "--notes", "./notes"]
+  }
+}' > .mcp.json
+
+# Step 2: Add index to .gitignore
+echo ".semantic-pages-index/" >> .gitignore
+
+# Step 3: Start Claude — it now has 21 note tools
+claude
+```
+
+### Asking Claude About Your Notes
+```
+You: What have I written about authentication?
+Claude: [calls search_semantic] I found 3 notes about authentication...
+
+You: What links to the API gateway doc?
+Claude: [calls backlinks] 4 notes link to api-gateway.md...
+
+You: Create a new note summarizing today's meeting
+Claude: [calls create_note] Created meeting-2024-03-15.md with frontmatter...
+
+You: Rename the #backend tag to #server across all notes
+Claude: [calls rename_tag] Renamed #backend to #server in 12 files.
+```
+
+### Per-Repo Pattern
 ```
 any-repo/
 ├── notes/                      # your markdown files
@@ -141,10 +391,257 @@ any-repo/
 
 Each repo gets its own independent knowledge base. No shared state between projects.
 
+---
+
+## Technical Details
+
+### Architecture Overview
+
+Semantic Pages is built with TypeScript and organized into a core library with thin transport layers:
+
+```
+src/
+├── core/                        # Pure library — no transport assumptions
+│   ├── index.ts                # Core exports
+│   ├── types.ts                # Shared type definitions
+│   ├── indexer.ts              # Markdown parser (unified + remark)
+│   ├── embedder.ts             # Local embedding model (@huggingface/transformers)
+│   ├── graph.ts                # Knowledge graph (graphology)
+│   ├── vector.ts               # HNSW vector index (hnswlib-node)
+│   ├── search-text.ts          # Full-text / regex search
+│   ├── crud.ts                 # Create/update/delete/move notes
+│   ├── frontmatter.ts          # Frontmatter + tag management
+│   └── watcher.ts              # File watcher (chokidar)
+│
+├── mcp/                         # MCP stdio server (thin wrapper over core)
+│   └── server.ts               # Server setup + 21 tool definitions
+│
+└── cli/                         # CLI entrypoint
+    └── index.ts                # commander-based CLI
+```
+
+### Tech Stack
+
+| Concern | Package | Why |
+|---------|---------|-----|
+| Markdown parsing | `unified` + `remark-parse` | AST-based, handles wikilinks |
+| Frontmatter | `gray-matter` | YAML/TOML frontmatter extraction |
+| Wikilinks | `remark-wiki-link` | `[[note-name]]` extraction from AST |
+| Embeddings | `@huggingface/transformers` | WASM runtime, no Python, no API key |
+| Embedding model | `nomic-embed-text-v1.5` | High quality, ~80MB, runs locally |
+| Vector index | `hnswlib-node` | HNSW algorithm, same as production vector DBs |
+| Knowledge graph | `graphology` | Directed graph, serializable, rich algorithms |
+| Graph algorithms | `graphology-traversal` + `graphology-shortest-path` | BFS, shortest path |
+| File watching | `chokidar` | Cross-platform, debounced |
+| MCP server | `@modelcontextprotocol/sdk` | Official MCP TypeScript SDK |
+| CLI | `commander` | Standard Node.js CLI framework |
+
+### Index Layout
+
+```
+.semantic-pages-index/           # gitignored, rebuilt on demand
+├── embeddings.json              # serialized chunk vectors
+├── hnsw.bin                     # HNSW vector index
+├── hnsw-meta.json               # chunk → document mapping
+├── graph.json                   # knowledge graph (graphology format)
+└── meta.json                    # index metadata (vault path, model, timestamp)
+```
+
+### Document Processing Pipeline
+
+#### Step 1: Parse
+```
+.md file → gray-matter (frontmatter) → remark (AST) → extract:
+  - title (frontmatter > first heading > filename)
+  - wikilinks ([[note-name]])
+  - tags (frontmatter tags: + inline #tags)
+  - headers (H1-H6)
+  - plain text (markdown stripped)
+```
+
+#### Step 2: Chunk
+```
+Plain text → split at sentence boundaries → ~512 token chunks
+```
+
+#### Step 3: Embed
+```
+Each chunk → nomic-embed-text-v1.5 (WASM) → normalized Float32Array
+```
+
+#### Step 4: Index
+```
+Embeddings → HNSW index (hnswlib-node)
+Wikilinks + tags → directed graph (graphology)
+```
+
+#### Step 5: Serve
+```
+MCP tools → query embeddings / graph / files → return results
+```
+
+### Using as a Library
+
+The core library is importable independently of the MCP server:
+
+```typescript
+import { Indexer, Embedder, GraphBuilder, VectorIndex, TextSearch } from "@theglitchking/semantic-pages";
+
+// Index all notes
+const indexer = new Indexer("./vault");
+const docs = await indexer.indexAll();
+
+// Build embeddings
+const embedder = new Embedder();
+await embedder.init();
+const chunks = docs.flatMap(d => d.chunks);
+const vecs = await embedder.embedBatch(chunks);
+
+// Build vector index
+const vectorIndex = new VectorIndex(embedder.getDimensions());
+vectorIndex.build(vecs, chunks.map((text, i) => ({
+  docPath: docs[Math.floor(i / docs.length)].path,
+  chunkIndex: i,
+  text
+})));
+
+// Search
+const queryVec = await embedder.embed("microservices architecture");
+const results = vectorIndex.search(queryVec, 5);
+
+// Build knowledge graph
+const graph = new GraphBuilder();
+graph.buildFromDocuments(docs);
+const backlinks = graph.backlinks("project-overview.md");
+const path = graph.findPath("overview.md", "auth.md");
+```
+
+### Performance
+
+| Metric | Value |
+|--------|-------|
+| Index 100 notes | ~5 seconds |
+| Index 1,000 notes | ~30 seconds |
+| Semantic search latency | <100ms |
+| Text search latency | <10ms |
+| Graph traversal latency | <5ms |
+| Model download (first run) | ~80MB, cached at `~/.semantic-pages/models/` |
+| Index size (100 notes) | ~10MB |
+| npm package size | 85.7 kB |
+
+---
+
 ## Requirements
 
-- Node.js >= 18
+- **Node.js**: Version 18.0.0 or higher
+- **Operating System**: Linux, macOS, or Windows (with WSL2)
+- **Disk Space**: ~80MB for the embedding model (downloaded once)
+
+---
+
+## Troubleshooting
+
+### Installation Issues
+
+**Problem**: `npx semantic-pages` fails or shows "not found"
+
+**Solution**:
+```bash
+# Clear npx cache and retry
+npx --yes semantic-pages --notes ./vault --stats
+
+# Or install globally
+npm install -g @theglitchking/semantic-pages
+```
+
+**Problem**: Model download fails
+
+**Solution**:
+```bash
+# Check internet connection, then retry
+# The model is cached at ~/.semantic-pages/models/
+# Delete and re-download if corrupted:
+rm -rf ~/.semantic-pages/models/
+semantic-pages --notes ./vault --reindex
+```
+
+### Usage Issues
+
+**Problem**: Search returns no results
+
+**Solution**:
+```bash
+# Force reindex
+semantic-pages --notes ./vault --reindex
+
+# Check that .md files exist in the path
+ls ./vault/*.md
+```
+
+**Problem**: Index seems stale after editing files externally
+
+**Solution**: The file watcher should catch changes, but if it misses some:
+```bash
+# Force reindex
+semantic-pages --notes ./vault --reindex
+```
+
+**Problem**: `hnswlib-node` fails to install (native addon)
+
+**Solution**:
+```bash
+# Install build tools
+# On Ubuntu/Debian:
+sudo apt install build-essential python3
+
+# On macOS:
+xcode-select --install
+
+# Then retry
+npm install -g @theglitchking/semantic-pages
+```
+
+---
+
+## Contributing
+
+Contributions are welcome! The project uses:
+- **TypeScript** with strict mode
+- **tsup** for bundling (ESM)
+- **vitest** for testing (123 tests across 11 suites)
+
+```bash
+# Clone and install
+git clone https://github.com/TheGlitchKing/semantic-pages.git
+cd semantic-pages
+npm install
+
+# Run tests
+npm test
+
+# Build
+npm run build
+
+# Type check
+npm run lint
+```
+
+---
 
 ## License
 
-MIT
+MIT License - see [LICENSE](./LICENSE) file for details.
+
+---
+
+## Support
+
+- **GitHub Issues**: [Report bugs or request features](https://github.com/TheGlitchKing/semantic-pages/issues)
+- **NPM Package**: [@theglitchking/semantic-pages](https://www.npmjs.com/package/@theglitchking/semantic-pages)
+- **Marketplace**: [Glitch Kingdom of Plugins](https://github.com/TheGlitchKing/glitch-kingdom-of-plugins)
+
+---
+
+**Made with care by TheGlitchKing**
+
+[NPM](https://www.npmjs.com/package/@theglitchking/semantic-pages) | [GitHub](https://github.com/TheGlitchKing/semantic-pages) | [Issues](https://github.com/TheGlitchKing/semantic-pages/issues)
