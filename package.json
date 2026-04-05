@@ -1,0 +1,11 @@
+{
+  "name": "template-ai-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@theglitchking/hit-em-with-the-docs": "latest"
+  }
+}

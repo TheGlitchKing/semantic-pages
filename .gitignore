@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+
+# Claude Code local overrides
+.claude/settings.local.json
+
+# Memory is personal — folder is tracked, contents are not
+.claude/memory/*
+!.claude/memory/.gitkeep
