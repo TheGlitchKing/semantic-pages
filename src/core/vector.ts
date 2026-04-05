@@ -1,4 +1,5 @@
-import { HierarchicalNSW } from "hnswlib-node";
+import hnswlib from "hnswlib-node";
+const { HierarchicalNSW } = hnswlib;
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
@@ -11,7 +12,7 @@ interface ChunkMeta {
 }
 
 export class VectorIndex {
-  private index: HierarchicalNSW | null = null;
+  private index: InstanceType<typeof HierarchicalNSW> | null = null;
   private dimensions: number;
   private chunkMeta: ChunkMeta[] = [];
 
