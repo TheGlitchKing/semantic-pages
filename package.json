@@ -1,5 +1,5 @@
 {
-  "name": "semantic-pages",
+  "name": "@theglitchking/semantic-pages",
   "version": "0.1.0",
   "description": "Semantic search + knowledge graph MCP server for any folder of markdown files",
   "type": "module",
@@ -10,7 +10,7 @@
     "./mcp": "./dist/mcp/server.js"
   },
   "bin": {
-    "semantic-pages": "./dist/cli/index.js"
+    "semantic-pages": "dist/cli/index.js"
   },
   "files": [
     "dist",
