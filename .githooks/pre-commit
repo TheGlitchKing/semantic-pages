@@ -1,0 +1,22 @@
+#!/bin/bash
+# ── Codebase Mapper: regenerate project map on relevant changes ──
+STAGED_FILES=$(git diff --cached --name-only 2>/dev/null || true)
+EXTENSIONS_PATTERN='\.(py|ts|tsx|js|jsx|go|java|yaml|yml)$|docker-compose|package\.json|Cargo\.toml|go\.mod'
+if echo "$STAGED_FILES" | grep -qE "$EXTENSIONS_PATTERN" 2>/dev/null; then
+    MAP_SCRIPT=".claude/project-map/generate.py"
+    if [ -f "$MAP_SCRIPT" ]; then
+        PYTHON=""
+        if [ -f ".venv/bin/python3" ]; then PYTHON=".venv/bin/python3"
+        elif command -v python3 &>/dev/null; then PYTHON="python3"
+        elif command -v python &>/dev/null; then PYTHON="python"
+        fi
+        if [ -n "$PYTHON" ]; then
+            echo "[codebase-mapper] Regenerating project map..."
+            if $PYTHON "$MAP_SCRIPT" 2>/dev/null; then
+                git add .claude/project-map/PROJECT_MAP.md .claude/project-map/checksums.json \
+                        .claude/project-map/sections/*.md .claude/project-map/learned-vocabulary.json 2>/dev/null || true
+            fi
+        fi
+    fi
+fi
+# ── End Codebase Mapper ──────────────────────────────────────────────────────

@@ -1,6 +1,12 @@
 # Dependencies
 node_modules/
 
+# Build output
+dist/
+
+# Index (rebuilt on demand)
+.semantic-pages-index/
+
 # Environment
 .env
 .env.local
