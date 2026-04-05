@@ -3,5 +3,9 @@
     "allow": [],
     "deny": []
   },
-  "env": {}
+  "env": {},
+  "statusLine": {
+    "type": "command",
+    "command": "/mnt/e/kentro/.claude/statusline.sh"
+  }
 }

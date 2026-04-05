@@ -1,0 +1,12 @@
+{
+  "name": "template-ai-workspace",
+  "slug": "template-ai-workspace",
+  "language": "javascript",
+  "framework": "node-generic",
+  "database": "unknown",
+  "orm": "unknown",
+  "auth": "unknown",
+  "package_manager": "npm",
+  "infrastructure": "none",
+  "project_root": "/mnt/e/the-glitch-kingdom/semantic-pages"
+}
