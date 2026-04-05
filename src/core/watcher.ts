@@ -12,11 +12,14 @@ export class Watcher extends EventEmitter {
   private debounceMs: number;
   private pendingChanges = new Set<string>();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private readyPromise: Promise<void> | null = null;
+  private usePolling: boolean;
 
-  constructor(notesPath: string, debounceMs: number = 500) {
+  constructor(notesPath: string, debounceMs: number = 500, usePolling: boolean = false) {
     super();
     this.notesPath = notesPath;
     this.debounceMs = debounceMs;
+    this.usePolling = usePolling;
   }
 
   start(): void {
@@ -30,12 +33,21 @@ export class Watcher extends EventEmitter {
         "**/.semantic-pages-index/**",
         "**/.git/**",
       ],
+      ...(this.usePolling ? { usePolling: true, interval: 100 } : {}),
+    });
+
+    this.readyPromise = new Promise<void>((resolve) => {
+      this.fsWatcher!.on("ready", resolve);
     });
 
     this.fsWatcher.on("add", (path) => this.enqueue(path));
     this.fsWatcher.on("change", (path) => this.enqueue(path));
     this.fsWatcher.on("unlink", (path) => this.enqueue(path));
     this.fsWatcher.on("error", (err) => this.emit("error", err));
+  }
+
+  async ready(): Promise<void> {
+    if (this.readyPromise) await this.readyPromise;
   }
 
   stop(): void {
