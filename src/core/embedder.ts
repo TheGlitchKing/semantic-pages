@@ -1,13 +1,16 @@
 import { AutoTokenizer } from "@huggingface/transformers";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { existsSync, createWriteStream } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, cpus } from "node:os";
 import { Readable } from "node:stream";
 import { pipeline as streamPipeline } from "node:stream/promises";
+import { Worker } from "node:worker_threads";
+import { fileURLToPath } from "node:url";
 
 const DEFAULT_MODEL = "nomic-ai/nomic-embed-text-v1.5";
 const CACHE_DIR = join(homedir(), ".semantic-pages", "models");
+const DEFAULT_WORKERS = Math.min(cpus().length, 4);
 
 // ONNX model file paths per known model
 const ONNX_MODEL_PATHS: Record<string, string> = {
@@ -56,9 +59,12 @@ export class Embedder {
   private dimensions = 0;
   private runtimeLabel: RuntimeLabel = "wasm";
   private initialized = false;
+  private numWorkers: number;
+  private modelPath = "";
 
-  constructor(model: string = DEFAULT_MODEL) {
+  constructor(model: string = DEFAULT_MODEL, numWorkers: number = DEFAULT_WORKERS) {
     this.model = model;
+    this.numWorkers = numWorkers;
   }
 
   async init(): Promise<void> {
@@ -73,7 +79,8 @@ export class Embedder {
     this.runtimeLabel = label;
 
     // Download ONNX model if not cached
-    const modelPath = join(modelDir, "model.onnx");
+    this.modelPath = join(modelDir, "model.onnx");
+    const modelPath = this.modelPath;
     if (!existsSync(modelPath)) {
       const onnxSubpath = ONNX_MODEL_PATHS[this.model] ?? "onnx/model.onnx";
       const url = `https://huggingface.co/${this.model}/resolve/main/${onnxSubpath}`;
@@ -185,12 +192,86 @@ export class Embedder {
     texts: string[],
     onProgress?: (embedded: number, total: number) => void
   ): Promise<Float32Array[]> {
+    // Use workers for large batches (overhead isn't worth it for small ones)
+    if (this.numWorkers > 1 && texts.length >= this.numWorkers * 2) {
+      return this.embedBatchParallel(texts, onProgress);
+    }
+    // Serial fallback
     const results: Float32Array[] = [];
     for (let i = 0; i < texts.length; i++) {
       results.push(await this.embed(texts[i]));
       onProgress?.(i + 1, texts.length);
     }
     return results;
+  }
+
+  private async embedBatchParallel(
+    texts: string[],
+    onProgress?: (embedded: number, total: number) => void
+  ): Promise<Float32Array[]> {
+    // Resolve worker script path (adjacent to this file in dist/)
+    const thisDir = dirname(fileURLToPath(import.meta.url));
+    const workerPath = join(thisDir, "embed-worker.js");
+
+    if (!existsSync(workerPath)) {
+      // Fallback to serial if worker script not found
+      process.stderr.write("Worker script not found, falling back to serial embedding\n");
+      const results: Float32Array[] = [];
+      for (let i = 0; i < texts.length; i++) {
+        results.push(await this.embed(texts[i]));
+        onProgress?.(i + 1, texts.length);
+      }
+      return results;
+    }
+
+    // Split texts into chunks for each worker
+    const chunkSize = Math.ceil(texts.length / this.numWorkers);
+    const chunks: { texts: string[]; startIndex: number }[] = [];
+    for (let i = 0; i < texts.length; i += chunkSize) {
+      chunks.push({ texts: texts.slice(i, i + chunkSize), startIndex: i });
+    }
+
+    const allResults = new Array<Float32Array>(texts.length);
+    let totalDone = 0;
+
+    const workerPromises = chunks.map((chunk) => {
+      return new Promise<void>((resolve, reject) => {
+        const worker = new Worker(workerPath, {
+          workerData: {
+            modelPath: this.modelPath,
+            modelName: this.model,
+            cacheDir: CACHE_DIR,
+            runtimeLabel: this.runtimeLabel,
+          },
+        });
+
+        worker.on("message", (msg: any) => {
+          if (msg.type === "ready") {
+            worker.postMessage({ type: "embed", texts: chunk.texts, startIndex: chunk.startIndex });
+          } else if (msg.type === "progress") {
+            totalDone++;
+            onProgress?.(totalDone, texts.length);
+          } else if (msg.type === "result") {
+            for (let i = 0; i < msg.embeddings.length; i++) {
+              allResults[chunk.startIndex + i] = new Float32Array(msg.embeddings[i]);
+            }
+            worker.terminate();
+            resolve();
+          } else if (msg.type === "error") {
+            worker.terminate();
+            reject(new Error(msg.error));
+          }
+        });
+
+        worker.on("error", (err) => {
+          worker.terminate();
+          reject(err);
+        });
+      });
+    });
+
+    await Promise.all(workerPromises);
+    return allResults;
   }
 
   getDimensions(): number {

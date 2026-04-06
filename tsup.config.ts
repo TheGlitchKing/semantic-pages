@@ -3,6 +3,7 @@ import { defineConfig } from "tsup";
 export default defineConfig({
   entry: {
     "core/index": "src/core/index.ts",
+    "core/embed-worker": "src/core/embed-worker.ts",
     "mcp/server": "src/mcp/server.ts",
     "cli/index": "src/cli/index.ts",
   },

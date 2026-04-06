@@ -18,6 +18,7 @@ export interface ServerOptions {
   watch?: boolean;
   waitForReady?: boolean;
   model?: string;
+  workers?: number;
   onProgress?: (embedded: number, total: number) => void;
 }
 
@@ -27,7 +28,7 @@ export async function createServer(notesPath: string, options: ServerOptions = {
 
   // Core services
   const indexer = new Indexer(notesPath);
-  const embedder = new Embedder(options.model);
+  const embedder = new Embedder(options.model, options.workers);
   const graph = new GraphBuilder();
   const textSearch = new TextSearch();
   const crud = new NoteCrud(notesPath);

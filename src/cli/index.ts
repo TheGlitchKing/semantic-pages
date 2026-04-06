@@ -237,6 +237,7 @@ program
   .option("--reindex", "Force full reindex and exit")
   .option("--stats", "Show vault statistics and exit")
   .option("--model <name>", "Embedding model to use", "nomic-ai/nomic-embed-text-v1.5")
+  .option("--workers <n>", "Number of worker threads for parallel embedding", parseInt)
   .option("--no-watch", "Disable file watcher")
   .action(async (opts) => {
     const notesPath = resolve(opts.notes);
@@ -263,6 +264,7 @@ program
         watch: false,
         waitForReady: true,
         model: opts.model,
+        workers: opts.workers,
         onProgress: (embedded, total) => {
           process.stderr.write(`\rEmbedding ${embedded}/${total} chunks...`);
         },
@@ -274,7 +276,7 @@ program
 
     // Default: start MCP server on stdio
     const { startServer } = await import("../mcp/server.js");
-    await startServer(notesPath, { watch: opts.watch, model: opts.model });
+    await startServer(notesPath, { watch: opts.watch, model: opts.model, workers: opts.workers });
   });
 
 program.parse();
