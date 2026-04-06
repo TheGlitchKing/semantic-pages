@@ -10,7 +10,11 @@ import { fileURLToPath } from "node:url";
 
 const DEFAULT_MODEL = "nomic-ai/nomic-embed-text-v1.5";
 const CACHE_DIR = join(homedir(), ".semantic-pages", "models");
-const DEFAULT_WORKERS = Math.min(cpus().length, 4);
+// Default to 1 worker (serial). Worker threads only help on memory-rich machines
+// (each worker loads its own ONNX session, ~400 MB each). On typical dev machines
+// with <4 GB free RAM, parallel workers cause swap thrashing and are 3x slower.
+// Enable with --workers N when you have sufficient RAM (N * ~400 MB free).
+const DEFAULT_WORKERS = 1;
 
 // ONNX model file paths per known model
 const ONNX_MODEL_PATHS: Record<string, string> = {
