@@ -30,6 +30,32 @@ export async function createServer(notesPath: string, options: { watch?: boolean
   let documents: IndexedDocument[] = [];
   let vectorIndex: VectorIndex | null = null;
 
+  async function tryLoadCachedIndex(): Promise<boolean> {
+    try {
+      await embedder.init();
+
+      // Check if saved index exists
+      const tempVector = new VectorIndex(embedder.getDimensions());
+      const vectorLoaded = await tempVector.load(indexPath);
+      if (!vectorLoaded) return false;
+
+      const savedEmbeddings = await embedder.loadEmbeddings(indexPath);
+      if (savedEmbeddings.size === 0) return false;
+
+      const graphLoaded = await graph.load(indexPath);
+      if (!graphLoaded) return false;
+
+      // Still parse docs for text search and document list
+      documents = await indexer.indexAll();
+      textSearch.setDocuments(documents);
+
+      vectorIndex = tempVector;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async function fullIndex() {
     await embedder.init();
     documents = await indexer.indexAll();
@@ -366,8 +392,11 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     }
   );
 
-  // Initial index
-  await fullIndex();
+  // Try loading cached index first, fall back to full reindex
+  const cached = await tryLoadCachedIndex();
+  if (!cached) {
+    await fullIndex();
+  }
 
   // File watcher
   if (options.watch !== false) {

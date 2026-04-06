@@ -28,6 +28,7 @@ export class Watcher extends EventEmitter {
     this.fsWatcher = watch("**/*.md", {
       cwd: this.notesPath,
       ignoreInitial: true,
+      followSymlinks: true,
       ignored: [
         "**/node_modules/**",
         "**/.semantic-pages-index/**",
