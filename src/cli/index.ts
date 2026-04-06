@@ -262,6 +262,7 @@ program
       await createServer(notesPath, {
         watch: false,
         waitForReady: true,
+        model: opts.model,
         onProgress: (embedded, total) => {
           process.stderr.write(`\rEmbedding ${embedded}/${total} chunks...`);
         },
@@ -273,7 +274,7 @@ program
 
     // Default: start MCP server on stdio
     const { startServer } = await import("../mcp/server.js");
-    await startServer(notesPath, { watch: opts.watch });
+    await startServer(notesPath, { watch: opts.watch, model: opts.model });
   });
 
 program.parse();

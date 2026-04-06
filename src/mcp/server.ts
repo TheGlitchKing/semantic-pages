@@ -1,8 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { Indexer } from "../core/indexer.js";
 import { Embedder } from "../core/embedder.js";
 import { GraphBuilder } from "../core/graph.js";
@@ -16,6 +17,7 @@ import type { IndexedDocument, IndexState, VaultStats } from "../core/types.js";
 export interface ServerOptions {
   watch?: boolean;
   waitForReady?: boolean;
+  model?: string;
   onProgress?: (embedded: number, total: number) => void;
 }
 
@@ -25,7 +27,7 @@ export async function createServer(notesPath: string, options: ServerOptions = {
 
   // Core services
   const indexer = new Indexer(notesPath);
-  const embedder = new Embedder();
+  const embedder = new Embedder(options.model);
   const graph = new GraphBuilder();
   const textSearch = new TextSearch();
   const crud = new NoteCrud(notesPath);
@@ -42,6 +44,16 @@ export async function createServer(notesPath: string, options: ServerOptions = {
     try {
       indexState = "loading";
       await embedder.init();
+
+      // Check for model mismatch — if model changed, cached embeddings are invalid
+      const metaPath = join(indexPath, "meta.json");
+      if (existsSync(metaPath)) {
+        const meta = JSON.parse(await readFile(metaPath, "utf-8"));
+        if (meta.model && meta.model !== embedder.getModel()) {
+          process.stderr.write(`Model changed (${meta.model} → ${embedder.getModel()}), forcing reindex\n`);
+          return false;
+        }
+      }
 
       const tempVector = new VectorIndex(embedder.getDimensions());
       const vectorLoaded = await tempVector.load(indexPath);
@@ -149,6 +161,12 @@ export async function createServer(notesPath: string, options: ServerOptions = {
       graph.save(indexPath),
       newVector.save(indexPath),
       embedder.saveEmbeddings(cumulativeEmbeddings, indexPath),
+      writeFile(join(indexPath, "meta.json"), JSON.stringify({
+        model: embedder.getModel(),
+        dimensions: embedder.getDimensions(),
+        totalChunks: allChunks.length,
+        indexedAt: new Date().toISOString(),
+      })),
     ]);
   }
 
@@ -502,7 +520,7 @@ export async function createServer(notesPath: string, options: ServerOptions = {
   return server;
 }
 
-export async function startServer(notesPath: string, options: { watch?: boolean } = {}) {
+export async function startServer(notesPath: string, options: ServerOptions = {}) {
   const server = await createServer(notesPath, options);
   const transport = new StdioServerTransport();
   await server.connect(transport);
