@@ -17,3 +17,4 @@ dist/
 # Memory is personal — folder is tracked, contents are not
 .claude/memory/*
 !.claude/memory/.gitkeep
+.planning/
