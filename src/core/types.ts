@@ -54,6 +54,7 @@ export interface VaultStats {
   totalEmbeddings: number;
   embeddingDimensions: number;
   embeddingModel: string;
+  embeddingRuntime: "native" | "wasm" | "unknown";
   graphNodes: number;
   graphEdges: number;
   indexSize: number;

@@ -13,4 +13,8 @@ export default defineConfig({
   target: "node18",
   splitting: true,
   outDir: "dist",
+  external: [
+    "onnxruntime-node",
+    "onnxruntime-web",
+  ],
 });

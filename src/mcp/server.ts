@@ -418,6 +418,7 @@ export async function createServer(notesPath: string, options: { watch?: boolean
         totalEmbeddings: vectorIndex?.getChunkMeta().length ?? 0,
         embeddingDimensions: embedder.getDimensions(),
         embeddingModel: embedder.getModel(),
+        embeddingRuntime: embedder.getRuntime?.() ?? "unknown",
         graphNodes: graphStats.totalNodes,
         graphEdges: graphStats.totalEdges,
         indexSize: 0,
