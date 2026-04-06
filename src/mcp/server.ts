@@ -82,23 +82,53 @@ export async function createServer(notesPath: string, options: ServerOptions = {
     const newGraph = new GraphBuilder();
     newGraph.buildFromDocuments(newDocs);
 
+    // Try to resume from partially saved embeddings (crash recovery)
+    const savedEmbeddings = await embedder.loadEmbeddings(indexPath);
+
     // Build vector index (slow — embedding)
+    const SAVE_INTERVAL = 100;
     const allChunks: { embedding: Float32Array; docPath: string; chunkIndex: number; text: string }[] = [];
+    const cumulativeEmbeddings = new Map<string, Float32Array>(savedEmbeddings);
+    let chunksSinceLastSave = 0;
+
     for (const doc of newDocs) {
-      const embeddings = await embedder.embedBatch(doc.chunks, (done, _total) => {
-        const current = allChunks.length + done;
-        indexProgress = { embedded: current, total: totalChunks };
-        options.onProgress?.(current, totalChunks);
-      });
-      for (let i = 0; i < embeddings.length; i++) {
-        allChunks.push({
-          embedding: embeddings[i],
-          docPath: doc.path,
-          chunkIndex: i,
-          text: doc.chunks[i],
-        });
+      // Check which chunks already have saved embeddings
+      const chunksToEmbed: { text: string; index: number }[] = [];
+      for (let i = 0; i < doc.chunks.length; i++) {
+        const key = `${doc.path}:${i}`;
+        const existing = cumulativeEmbeddings.get(key);
+        if (existing) {
+          allChunks.push({ embedding: existing, docPath: doc.path, chunkIndex: i, text: doc.chunks[i] });
+        } else {
+          chunksToEmbed.push({ text: doc.chunks[i], index: i });
+        }
       }
+
+      if (chunksToEmbed.length > 0) {
+        const embeddings = await embedder.embedBatch(
+          chunksToEmbed.map((c) => c.text),
+          (done, _total) => {
+            const current = allChunks.length + done;
+            indexProgress = { embedded: current, total: totalChunks };
+            options.onProgress?.(current, totalChunks);
+          }
+        );
+        for (let i = 0; i < embeddings.length; i++) {
+          const { index, text } = chunksToEmbed[i];
+          const key = `${doc.path}:${index}`;
+          cumulativeEmbeddings.set(key, embeddings[i]);
+          allChunks.push({ embedding: embeddings[i], docPath: doc.path, chunkIndex: index, text });
+          chunksSinceLastSave++;
+        }
+      }
+
       indexProgress = { embedded: allChunks.length, total: totalChunks };
+
+      // Incremental save every SAVE_INTERVAL new chunks
+      if (chunksSinceLastSave >= SAVE_INTERVAL) {
+        await embedder.saveEmbeddings(cumulativeEmbeddings, indexPath);
+        chunksSinceLastSave = 0;
+      }
     }
 
     const newVector = new VectorIndex(embedder.getDimensions());
@@ -114,14 +144,11 @@ export async function createServer(notesPath: string, options: ServerOptions = {
     vectorIndex = newVector;
     indexState = "ready";
 
-    // Persist
+    // Final persist
     await Promise.all([
       graph.save(indexPath),
       newVector.save(indexPath),
-      embedder.saveEmbeddings(
-        new Map(allChunks.map((c) => [`${c.docPath}:${c.chunkIndex}`, c.embedding])),
-        indexPath
-      ),
+      embedder.saveEmbeddings(cumulativeEmbeddings, indexPath),
     ]);
   }
 
