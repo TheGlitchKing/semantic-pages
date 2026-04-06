@@ -181,10 +181,14 @@ export class Embedder {
     return result;
   }
 
-  async embedBatch(texts: string[]): Promise<Float32Array[]> {
+  async embedBatch(
+    texts: string[],
+    onProgress?: (embedded: number, total: number) => void
+  ): Promise<Float32Array[]> {
     const results: Float32Array[] = [];
-    for (const text of texts) {
-      results.push(await this.embed(text));
+    for (let i = 0; i < texts.length; i++) {
+      results.push(await this.embed(texts[i]));
+      onProgress?.(i + 1, texts.length);
     }
     return results;
   }

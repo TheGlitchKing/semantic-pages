@@ -13,7 +13,13 @@ import { FrontmatterManager, TagManager } from "../core/frontmatter.js";
 import { Watcher } from "../core/watcher.js";
 import type { IndexedDocument, IndexState, VaultStats } from "../core/types.js";
 
-export async function createServer(notesPath: string, options: { watch?: boolean; waitForReady?: boolean } = {}) {
+export interface ServerOptions {
+  watch?: boolean;
+  waitForReady?: boolean;
+  onProgress?: (embedded: number, total: number) => void;
+}
+
+export async function createServer(notesPath: string, options: ServerOptions = {}) {
   const indexPath = join(notesPath, ".semantic-pages-index");
   await mkdir(indexPath, { recursive: true });
 
@@ -79,7 +85,11 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     // Build vector index (slow — embedding)
     const allChunks: { embedding: Float32Array; docPath: string; chunkIndex: number; text: string }[] = [];
     for (const doc of newDocs) {
-      const embeddings = await embedder.embedBatch(doc.chunks);
+      const embeddings = await embedder.embedBatch(doc.chunks, (done, _total) => {
+        const current = allChunks.length + done;
+        indexProgress = { embedded: current, total: totalChunks };
+        options.onProgress?.(current, totalChunks);
+      });
       for (let i = 0; i < embeddings.length; i++) {
         allChunks.push({
           embedding: embeddings[i],
