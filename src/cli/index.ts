@@ -216,7 +216,7 @@ program
     "  List MCP tools:    semantic-pages tools\n" +
     "  Tool details:      semantic-pages tools search_semantic"
   )
-  .version("0.4.0");
+  .version("0.4.1");
 
 program
   .command("tools [name]")

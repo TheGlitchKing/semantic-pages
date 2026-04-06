@@ -508,15 +508,16 @@ export async function createServer(notesPath: string, options: ServerOptions = {
     }
   );
 
-  // --- Startup: load cached index, then reindex ---
+  // --- Startup: load cached index; only reindex if no valid cache found ---
   const cached = await tryLoadCachedIndex();
   if (options.waitForReady) {
-    // Blocking mode (CLI --reindex): wait for full index before returning
+    // Blocking mode (CLI --reindex): always do a full index before returning
     await fullIndex();
-  } else {
-    // Non-blocking mode (MCP server): index in background
+  } else if (!cached) {
+    // No valid cache — index in background so the server becomes usable quickly
     backgroundIndex();
   }
+  // If cache loaded, serve immediately. File watcher handles incremental updates.
 
   // File watcher
   if (options.watch !== false) {
