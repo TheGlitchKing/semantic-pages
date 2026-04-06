@@ -209,9 +209,16 @@ export class Embedder {
     texts: string[],
     onProgress?: (embedded: number, total: number) => void
   ): Promise<Float32Array[]> {
-    // Resolve worker script path (adjacent to this file in dist/)
+    // Resolve worker script path. With tsup splitting, embedder code may land
+    // in a top-level chunk (dist/chunk-*.js) rather than dist/core/index.js,
+    // so we try two locations: adjacent to this chunk, and dist/core/ relative
+    // to the package root (two levels up from a dist/ chunk file).
     const thisDir = dirname(fileURLToPath(import.meta.url));
-    const workerPath = join(thisDir, "embed-worker.js");
+    let workerPath = join(thisDir, "embed-worker.js");
+    if (!existsSync(workerPath)) {
+      // Chunk file at dist/ level — worker is in dist/core/
+      workerPath = join(thisDir, "core", "embed-worker.js");
+    }
 
     if (!existsSync(workerPath)) {
       // Fallback to serial if worker script not found
