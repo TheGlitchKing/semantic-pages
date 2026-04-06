@@ -10,7 +10,7 @@
     "./mcp": "./dist/mcp/server.js"
   },
   "bin": {
-    "semantic-pages": "./bin/semantic-pages"
+    "semantic-pages": "bin/semantic-pages"
   },
   "files": [
     "bin",
