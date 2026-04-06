@@ -259,7 +259,7 @@ program
 
     if (opts.reindex) {
       const { createServer } = await import("../mcp/server.js");
-      await createServer(notesPath, { watch: false });
+      await createServer(notesPath, { watch: false, waitForReady: true });
       console.log("Reindex complete.");
       process.exit(0);
     }

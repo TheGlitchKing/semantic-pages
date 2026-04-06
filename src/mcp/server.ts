@@ -3,7 +3,6 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
 import { Indexer } from "../core/indexer.js";
 import { Embedder } from "../core/embedder.js";
 import { GraphBuilder } from "../core/graph.js";
@@ -12,9 +11,9 @@ import { TextSearch } from "../core/search-text.js";
 import { NoteCrud } from "../core/crud.js";
 import { FrontmatterManager, TagManager } from "../core/frontmatter.js";
 import { Watcher } from "../core/watcher.js";
-import type { IndexedDocument, VaultStats } from "../core/types.js";
+import type { IndexedDocument, IndexState, VaultStats } from "../core/types.js";
 
-export async function createServer(notesPath: string, options: { watch?: boolean } = {}) {
+export async function createServer(notesPath: string, options: { watch?: boolean; waitForReady?: boolean } = {}) {
   const indexPath = join(notesPath, ".semantic-pages-index");
   await mkdir(indexPath, { recursive: true });
 
@@ -29,12 +28,15 @@ export async function createServer(notesPath: string, options: { watch?: boolean
 
   let documents: IndexedDocument[] = [];
   let vectorIndex: VectorIndex | null = null;
+  let indexState: IndexState = "empty";
+  let indexProgress = { embedded: 0, total: 0 };
+  let indexingPromise: Promise<void> | null = null;
 
   async function tryLoadCachedIndex(): Promise<boolean> {
     try {
+      indexState = "loading";
       await embedder.init();
 
-      // Check if saved index exists
       const tempVector = new VectorIndex(embedder.getDimensions());
       const vectorLoaded = await tempVector.load(indexPath);
       if (!vectorLoaded) return false;
@@ -45,11 +47,11 @@ export async function createServer(notesPath: string, options: { watch?: boolean
       const graphLoaded = await graph.load(indexPath);
       if (!graphLoaded) return false;
 
-      // Still parse docs for text search and document list
       documents = await indexer.indexAll();
       textSearch.setDocuments(documents);
 
       vectorIndex = tempVector;
+      indexState = "stale";
       return true;
     } catch {
       return false;
@@ -57,14 +59,26 @@ export async function createServer(notesPath: string, options: { watch?: boolean
   }
 
   async function fullIndex() {
-    await embedder.init();
-    documents = await indexer.indexAll();
-    textSearch.setDocuments(documents);
-    graph.buildFromDocuments(documents);
+    indexState = "indexing";
+    indexProgress = { embedded: 0, total: 0 };
 
-    // Build vector index
+    await embedder.init();
+    const newDocs = await indexer.indexAll();
+
+    // Count total chunks for progress
+    const totalChunks = newDocs.reduce((n, d) => n + d.chunks.length, 0);
+    indexProgress = { embedded: 0, total: totalChunks };
+
+    // Build text search and graph immediately (fast, no embeddings needed)
+    const newTextSearch = new TextSearch();
+    newTextSearch.setDocuments(newDocs);
+
+    const newGraph = new GraphBuilder();
+    newGraph.buildFromDocuments(newDocs);
+
+    // Build vector index (slow — embedding)
     const allChunks: { embedding: Float32Array; docPath: string; chunkIndex: number; text: string }[] = [];
-    for (const doc of documents) {
+    for (const doc of newDocs) {
       const embeddings = await embedder.embedBatch(doc.chunks);
       for (let i = 0; i < embeddings.length; i++) {
         allChunks.push({
@@ -74,18 +88,26 @@ export async function createServer(notesPath: string, options: { watch?: boolean
           text: doc.chunks[i],
         });
       }
+      indexProgress = { embedded: allChunks.length, total: totalChunks };
     }
 
-    vectorIndex = new VectorIndex(embedder.getDimensions());
-    vectorIndex.build(
+    const newVector = new VectorIndex(embedder.getDimensions());
+    newVector.build(
       allChunks.map((c) => c.embedding),
       allChunks.map((c) => ({ docPath: c.docPath, chunkIndex: c.chunkIndex, text: c.text }))
     );
 
+    // Atomic swap — all state updated together
+    documents = newDocs;
+    textSearch.setDocuments(newDocs);
+    graph.buildFromDocuments(newDocs);
+    vectorIndex = newVector;
+    indexState = "ready";
+
     // Persist
     await Promise.all([
       graph.save(indexPath),
-      vectorIndex.save(indexPath),
+      newVector.save(indexPath),
       embedder.saveEmbeddings(
         new Map(allChunks.map((c) => [`${c.docPath}:${c.chunkIndex}`, c.embedding])),
         indexPath
@@ -93,10 +115,33 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     ]);
   }
 
+  function backgroundIndex() {
+    if (indexingPromise) return; // already indexing
+    indexingPromise = fullIndex()
+      .catch((err) => {
+        process.stderr.write(`Index error: ${err?.message ?? err}\n`);
+        if (indexState === "indexing") indexState = documents.length > 0 ? "stale" : "empty";
+      })
+      .finally(() => {
+        indexingPromise = null;
+      });
+  }
+
+  function textResponse(text: string) {
+    return { content: [{ type: "text" as const, text }] };
+  }
+
+  function indexingMessage(): string {
+    if (indexProgress.total > 0) {
+      return `Indexing in progress (${indexProgress.embedded}/${indexProgress.total} chunks)... Try again shortly.`;
+    }
+    return "Indexing in progress... Try again shortly.";
+  }
+
   // MCP Server
   const server = new McpServer({
     name: "semantic-pages",
-    version: "0.1.0",
+    version: "0.2.0",
   });
 
   // --- Search tools ---
@@ -105,10 +150,10 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     "Vector similarity search — find notes similar to a query by meaning",
     { query: z.string(), limit: z.number().optional().default(10) },
     async ({ query, limit }) => {
-      if (!vectorIndex) return { content: [{ type: "text" as const, text: "Index not built. Run reindex first." }] };
+      if (!vectorIndex) return textResponse(indexState === "empty" ? indexingMessage() : "Index not built. Run reindex first.");
       const queryEmbed = await embedder.embed(query);
       const results = vectorIndex.search(queryEmbed, limit);
-      return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+      return textResponse(JSON.stringify(results, null, 2));
     }
   );
 
@@ -124,8 +169,9 @@ export async function createServer(notesPath: string, options: { watch?: boolean
       limit: z.number().optional().default(20),
     },
     async (opts) => {
+      if (documents.length === 0 && indexState !== "ready") return textResponse(indexingMessage());
       const results = textSearch.search(opts);
-      return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+      return textResponse(JSON.stringify(results, null, 2));
     }
   );
 
@@ -134,8 +180,9 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     "Graph traversal — find notes connected to a concept via wikilinks and tags",
     { concept: z.string(), maxDepth: z.number().optional().default(2) },
     async ({ concept, maxDepth }) => {
+      if (documents.length === 0 && indexState !== "ready") return textResponse(indexingMessage());
       const results = graph.searchGraph(concept, maxDepth);
-      return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+      return textResponse(JSON.stringify(results, null, 2));
     }
   );
 
@@ -144,7 +191,7 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     "Combined semantic + graph search — vector results re-ranked by graph proximity",
     { query: z.string(), limit: z.number().optional().default(10) },
     async ({ query, limit }) => {
-      if (!vectorIndex) return { content: [{ type: "text" as const, text: "Index not built. Run reindex first." }] };
+      if (!vectorIndex) return textResponse(indexState === "empty" ? indexingMessage() : "Index not built. Run reindex first.");
 
       const queryEmbed = await embedder.embed(query);
       const semanticResults = vectorIndex.search(queryEmbed, limit * 2);
@@ -158,7 +205,7 @@ export async function createServer(notesPath: string, options: { watch?: boolean
       }));
       hybrid.sort((a, b) => b.score - a.score);
 
-      return { content: [{ type: "text" as const, text: JSON.stringify(hybrid.slice(0, limit), null, 2) }] };
+      return textResponse(JSON.stringify(hybrid.slice(0, limit), null, 2));
     }
   );
 
@@ -169,7 +216,7 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     { path: z.string() },
     async ({ path }) => {
       const content = await crud.read(path);
-      return { content: [{ type: "text" as const, text: content }] };
+      return textResponse(content);
     }
   );
 
@@ -181,7 +228,7 @@ export async function createServer(notesPath: string, options: { watch?: boolean
       const results = await crud.readMultiple(paths);
       const output: Record<string, string> = {};
       for (const [k, v] of results) output[k] = v;
-      return { content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }] };
+      return textResponse(JSON.stringify(output, null, 2));
     }
   );
 
@@ -190,6 +237,7 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     "List all indexed notes with metadata (title, tags, link count)",
     {},
     async () => {
+      if (documents.length === 0 && indexState !== "ready") return textResponse(indexingMessage());
       const list = documents.map((d) => ({
         path: d.path,
         title: d.title,
@@ -197,7 +245,7 @@ export async function createServer(notesPath: string, options: { watch?: boolean
         wikilinks: d.wikilinks.length,
         chunks: d.chunks.length,
       }));
-      return { content: [{ type: "text" as const, text: JSON.stringify(list, null, 2) }] };
+      return textResponse(JSON.stringify(list, null, 2));
     }
   );
 
@@ -212,7 +260,7 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     },
     async ({ path, content, frontmatter }) => {
       await crud.create(path, content, frontmatter);
-      return { content: [{ type: "text" as const, text: `Created: ${path}` }] };
+      return textResponse(`Created: ${path}`);
     }
   );
 
@@ -227,7 +275,7 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     },
     async ({ path, content, mode, heading }) => {
       await crud.update(path, content, { mode, heading });
-      return { content: [{ type: "text" as const, text: `Updated: ${path} (${mode})` }] };
+      return textResponse(`Updated: ${path} (${mode})`);
     }
   );
 
@@ -236,9 +284,9 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     "Delete a note permanently",
     { path: z.string(), confirm: z.boolean().default(false) },
     async ({ path, confirm }) => {
-      if (!confirm) return { content: [{ type: "text" as const, text: `Set confirm=true to delete ${path}` }] };
+      if (!confirm) return textResponse(`Set confirm=true to delete ${path}`);
       await crud.delete(path);
-      return { content: [{ type: "text" as const, text: `Deleted: ${path}` }] };
+      return textResponse(`Deleted: ${path}`);
     }
   );
 
@@ -248,7 +296,7 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     { from: z.string(), to: z.string() },
     async ({ from, to }) => {
       await crud.move(from, to);
-      return { content: [{ type: "text" as const, text: `Moved: ${from} → ${to}` }] };
+      return textResponse(`Moved: ${from} → ${to}`);
     }
   );
 
@@ -259,7 +307,7 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     { path: z.string() },
     async ({ path }) => {
       const fm = await frontmatterManager.get(path);
-      return { content: [{ type: "text" as const, text: JSON.stringify(fm, null, 2) }] };
+      return textResponse(JSON.stringify(fm, null, 2));
     }
   );
 
@@ -269,7 +317,7 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     { path: z.string(), fields: z.record(z.unknown()) },
     async ({ path, fields }) => {
       await frontmatterManager.update(path, fields);
-      return { content: [{ type: "text" as const, text: `Frontmatter updated: ${path}` }] };
+      return textResponse(`Frontmatter updated: ${path}`);
     }
   );
 
@@ -285,17 +333,17 @@ export async function createServer(notesPath: string, options: { watch?: boolean
       switch (action) {
         case "list": {
           const result = await tagManager.list(path);
-          return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+          return textResponse(JSON.stringify(result));
         }
         case "add": {
-          if (!tags?.length) return { content: [{ type: "text" as const, text: "No tags provided" }] };
+          if (!tags?.length) return textResponse("No tags provided");
           await tagManager.add(path, tags);
-          return { content: [{ type: "text" as const, text: `Added tags to ${path}: ${tags.join(", ")}` }] };
+          return textResponse(`Added tags to ${path}: ${tags.join(", ")}`);
         }
         case "remove": {
-          if (!tags?.length) return { content: [{ type: "text" as const, text: "No tags provided" }] };
+          if (!tags?.length) return textResponse("No tags provided");
           await tagManager.remove(path, tags);
-          return { content: [{ type: "text" as const, text: `Removed tags from ${path}: ${tags.join(", ")}` }] };
+          return textResponse(`Removed tags from ${path}: ${tags.join(", ")}`);
         }
       }
     }
@@ -307,7 +355,7 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     { oldTag: z.string(), newTag: z.string() },
     async ({ oldTag, newTag }) => {
       const count = await tagManager.renameVaultWide(oldTag, newTag);
-      return { content: [{ type: "text" as const, text: `Renamed #${oldTag} → #${newTag} in ${count} files` }] };
+      return textResponse(`Renamed #${oldTag} → #${newTag} in ${count} files`);
     }
   );
 
@@ -317,8 +365,9 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     "Find all notes that link TO a given note",
     { path: z.string() },
     async ({ path }) => {
+      if (documents.length === 0 && indexState !== "ready") return textResponse(indexingMessage());
       const results = graph.backlinks(path);
-      return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+      return textResponse(JSON.stringify(results, null, 2));
     }
   );
 
@@ -327,8 +376,9 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     "Find all notes linked FROM a given note",
     { path: z.string() },
     async ({ path }) => {
+      if (documents.length === 0 && indexState !== "ready") return textResponse(indexingMessage());
       const results = graph.forwardlinks(path);
-      return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+      return textResponse(JSON.stringify(results, null, 2));
     }
   );
 
@@ -337,9 +387,10 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     "Find the shortest path between two notes in the knowledge graph",
     { from: z.string(), to: z.string() },
     async ({ from, to }) => {
+      if (documents.length === 0 && indexState !== "ready") return textResponse(indexingMessage());
       const path = graph.findPath(from, to);
-      if (!path) return { content: [{ type: "text" as const, text: "No path found" }] };
-      return { content: [{ type: "text" as const, text: JSON.stringify(path) }] };
+      if (!path) return textResponse("No path found");
+      return textResponse(JSON.stringify(path));
     }
   );
 
@@ -348,8 +399,9 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     "Knowledge graph stats — most connected nodes, orphans, density",
     {},
     async () => {
+      if (documents.length === 0 && indexState !== "ready") return textResponse(indexingMessage());
       const stats = graph.statistics();
-      return { content: [{ type: "text" as const, text: JSON.stringify(stats, null, 2) }] };
+      return textResponse(JSON.stringify(stats, null, 2));
     }
   );
 
@@ -359,7 +411,7 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     "Vault and index statistics — note count, chunks, embeddings, graph density",
     {},
     async () => {
-      const graphStats = graph.statistics();
+      const graphStats = documents.length > 0 ? graph.statistics() : { totalNodes: 0, totalEdges: 0 };
       const stats: VaultStats = {
         totalNotes: documents.length,
         totalChunks: documents.reduce((n, d) => n + d.chunks.length, 0),
@@ -369,9 +421,11 @@ export async function createServer(notesPath: string, options: { watch?: boolean
         graphNodes: graphStats.totalNodes,
         graphEdges: graphStats.totalEdges,
         indexSize: 0,
-        lastIndexed: new Date().toISOString(),
+        lastIndexed: indexState === "ready" ? new Date().toISOString() : null,
+        indexState,
+        indexProgress: indexState === "indexing" ? indexProgress : undefined,
       };
-      return { content: [{ type: "text" as const, text: JSON.stringify(stats, null, 2) }] };
+      return textResponse(JSON.stringify(stats, null, 2));
     }
   );
 
@@ -380,29 +434,29 @@ export async function createServer(notesPath: string, options: { watch?: boolean
     "Force a full reindex of the vault",
     {},
     async () => {
+      if (indexingPromise) return textResponse("Reindex already in progress. " + indexingMessage());
       await fullIndex();
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Reindexed: ${documents.length} notes, ${documents.reduce((n, d) => n + d.chunks.length, 0)} chunks`,
-          },
-        ],
-      };
+      return textResponse(
+        `Reindexed: ${documents.length} notes, ${documents.reduce((n, d) => n + d.chunks.length, 0)} chunks`
+      );
     }
   );
 
-  // Try loading cached index first, fall back to full reindex
+  // --- Startup: load cached index, then reindex ---
   const cached = await tryLoadCachedIndex();
-  if (!cached) {
+  if (options.waitForReady) {
+    // Blocking mode (CLI --reindex): wait for full index before returning
     await fullIndex();
+  } else {
+    // Non-blocking mode (MCP server): index in background
+    backgroundIndex();
   }
 
   // File watcher
   if (options.watch !== false) {
     const watcher = new Watcher(notesPath);
-    watcher.on("changed", async () => {
-      await fullIndex();
+    watcher.on("changed", () => {
+      backgroundIndex();
     });
     watcher.start();
   }

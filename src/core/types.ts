@@ -40,6 +40,14 @@ export interface GraphStats {
   density: number;
 }
 
+export type IndexState = "empty" | "loading" | "stale" | "indexing" | "ready";
+
+export interface IndexProgress {
+  state: IndexState;
+  embedded?: number;
+  total?: number;
+}
+
 export interface VaultStats {
   totalNotes: number;
   totalChunks: number;
@@ -50,6 +58,8 @@ export interface VaultStats {
   graphEdges: number;
   indexSize: number;
   lastIndexed: string | null;
+  indexState: IndexState;
+  indexProgress?: { embedded: number; total: number };
 }
 
 export interface UpdateNoteOptions {
