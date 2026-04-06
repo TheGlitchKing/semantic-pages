@@ -15,6 +15,10 @@ const CACHE_DIR = join(homedir(), ".semantic-pages", "models");
 // with <4 GB free RAM, parallel workers cause swap thrashing and are 3x slower.
 // Enable with --workers N when you have sufficient RAM (N * ~400 MB free).
 const DEFAULT_WORKERS = 1;
+// Number of texts to embed in a single ONNX forward pass.
+// Transformers process batches nearly as fast as a single sample, so batching
+// reduces 2,853 ONNX calls to ~90 calls (batch_size=32) — ~16x faster.
+const DEFAULT_BATCH_SIZE = 32;
 
 // ONNX model file paths per known model
 const ONNX_MODEL_PATHS: Record<string, string> = {
@@ -64,11 +68,17 @@ export class Embedder {
   private runtimeLabel: RuntimeLabel = "wasm";
   private initialized = false;
   private numWorkers: number;
+  private batchSize: number;
   private modelPath = "";
 
-  constructor(model: string = DEFAULT_MODEL, numWorkers: number = DEFAULT_WORKERS) {
+  constructor(
+    model: string = DEFAULT_MODEL,
+    numWorkers: number = DEFAULT_WORKERS,
+    batchSize: number = DEFAULT_BATCH_SIZE
+  ) {
     this.model = model;
     this.numWorkers = numWorkers;
+    this.batchSize = batchSize;
   }
 
   async init(): Promise<void> {
@@ -108,7 +118,7 @@ export class Embedder {
     this.dimensions = test.length;
     this.initialized = true;
 
-    process.stderr.write(`Embedder ready (${label} runtime, ${this.dimensions}d)\n`);
+    process.stderr.write(`Embedder ready (${label} runtime, ${this.dimensions}d, batch_size=${this.batchSize})\n`);
   }
 
   async embed(text: string): Promise<Float32Array> {
@@ -192,26 +202,140 @@ export class Embedder {
     return result;
   }
 
+  // Mean pool + L2 normalize the output of a batched ONNX forward pass.
+  // outputData: flat Float32Array of shape [batchSize, seqLen, hiddenSize]
+  // maskData:   flat number[] of shape [batchSize, seqLen]
+  private meanPoolAndNormalizeMany(
+    outputData: Float32Array,
+    maskData: number[],
+    batchSize: number,
+    seqLen: number,
+    hiddenSize: number
+  ): Float32Array[] {
+    const results: Float32Array[] = [];
+    for (let b = 0; b < batchSize; b++) {
+      const result = new Float32Array(hiddenSize);
+      let maskSum = 0;
+      for (let t = 0; t < seqLen; t++) {
+        const mask = maskData[b * seqLen + t];
+        maskSum += mask;
+        const offset = (b * seqLen + t) * hiddenSize;
+        for (let d = 0; d < hiddenSize; d++) {
+          result[d] += outputData[offset + d] * mask;
+        }
+      }
+      if (maskSum > 0) {
+        for (let d = 0; d < hiddenSize; d++) result[d] /= maskSum;
+      }
+      // L2 normalize
+      let norm = 0;
+      for (let d = 0; d < hiddenSize; d++) norm += result[d] * result[d];
+      norm = Math.sqrt(norm);
+      if (norm > 0) {
+        for (let d = 0; d < hiddenSize; d++) result[d] /= norm;
+      }
+      results.push(result);
+    }
+    return results;
+  }
+
+  // Embed a sub-batch of texts (length <= batchSize) in a single ONNX forward pass.
+  //
+  // Tokenizes each text individually (well-defined output format for all HF versions),
+  // then manually pads to the longest sequence in the batch and builds a [n, seqLen]
+  // tensor for one ONNX call. The speedup is from batching the ONNX inference —
+  // individual tokenization is negligible (<1ms each).
+  private async embedSubBatch(texts: string[]): Promise<Float32Array[]> {
+    if (!this.session || !this.tokenizer || !this.ort)
+      throw new Error("Embedder not initialized. Call init() first.");
+
+    const n = texts.length;
+
+    // Tokenize each text individually — avoids ambiguous batch tokenizer output format
+    const encodings = await Promise.all(
+      texts.map((text) =>
+        this.tokenizer!(text, {
+          padding: false,
+          truncation: true,
+          max_length: 512,
+          return_tensor: false,
+        })
+      )
+    );
+
+    // Extract flat token arrays and find max sequence length for this batch
+    const tokenized = encodings.map((enc) => ({
+      ids: Array.from(enc.input_ids.data ?? enc.input_ids) as number[],
+      mask: Array.from(enc.attention_mask.data ?? enc.attention_mask) as number[],
+    }));
+    const seqLen = Math.max(...tokenized.map((t) => t.ids.length));
+
+    // Build flat padded tensors [n * seqLen] — pad with 0 (PAD token, zero attention)
+    const flatIds = new BigInt64Array(n * seqLen);
+    const flatMask = new BigInt64Array(n * seqLen);
+    const flatMaskNums = new Array<number>(n * seqLen).fill(0);
+
+    for (let i = 0; i < n; i++) {
+      const { ids, mask } = tokenized[i];
+      for (let j = 0; j < ids.length; j++) {
+        flatIds[i * seqLen + j] = BigInt(ids[j]);
+        flatMask[i * seqLen + j] = BigInt(mask[j]);
+        flatMaskNums[i * seqLen + j] = mask[j];
+      }
+      // Positions beyond ids.length remain 0 (padding)
+    }
+
+    // Build batched ONNX tensors [n, seqLen]
+    const inputIds = new this.ort.Tensor("int64", flatIds, [n, seqLen]);
+    const attentionMask = new this.ort.Tensor("int64", flatMask, [n, seqLen]);
+
+    const feeds: Record<string, unknown> = { input_ids: inputIds, attention_mask: attentionMask };
+
+    if (this.session.inputNames.includes("token_type_ids")) {
+      feeds.token_type_ids = new this.ort.Tensor(
+        "int64",
+        new BigInt64Array(n * seqLen),
+        [n, seqLen]
+      );
+    }
+
+    // Single forward pass → output shape [n, seqLen, hiddenSize]
+    const output = await this.session.run(feeds);
+    const outputTensor = output[this.session.outputNames[0]];
+    const hiddenSize = outputTensor.dims[outputTensor.dims.length - 1];
+
+    return this.meanPoolAndNormalizeMany(
+      outputTensor.data,
+      flatMaskNums,
+      n,
+      seqLen,
+      hiddenSize
+    );
+  }
+
   async embedBatch(
     texts: string[],
-    onProgress?: (embedded: number, total: number) => void
+    onProgress?: (embedded: number, total: number, subBatch?: Float32Array[]) => Promise<void> | void
   ): Promise<Float32Array[]> {
-    // Use workers for large batches (overhead isn't worth it for small ones)
+    // Workers path (disabled by default; kept for --workers N users)
     if (this.numWorkers > 1 && texts.length >= this.numWorkers * 2) {
       return this.embedBatchParallel(texts, onProgress);
     }
-    // Serial fallback
+
+    // True batched inference: slice into sub-batches and run one ONNX call each
     const results: Float32Array[] = [];
-    for (let i = 0; i < texts.length; i++) {
-      results.push(await this.embed(texts[i]));
-      onProgress?.(i + 1, texts.length);
+    for (let i = 0; i < texts.length; i += this.batchSize) {
+      const subBatch = texts.slice(i, i + this.batchSize);
+      const embeddings = await this.embedSubBatch(subBatch);
+      results.push(...embeddings);
+      await onProgress?.(Math.min(i + subBatch.length, texts.length), texts.length, embeddings);
     }
     return results;
   }
 
   private async embedBatchParallel(
     texts: string[],
-    onProgress?: (embedded: number, total: number) => void
+    onProgress?: (embedded: number, total: number, subBatch?: Float32Array[]) => Promise<void> | void
   ): Promise<Float32Array[]> {
     // Resolve worker script path. With tsup splitting, embedder code may land
     // in a top-level chunk (dist/chunk-*.js) rather than dist/core/index.js,
@@ -225,14 +349,9 @@ export class Embedder {
     }
 
     if (!existsSync(workerPath)) {
-      // Fallback to serial if worker script not found
-      process.stderr.write("Worker script not found, falling back to serial embedding\n");
-      const results: Float32Array[] = [];
-      for (let i = 0; i < texts.length; i++) {
-        results.push(await this.embed(texts[i]));
-        onProgress?.(i + 1, texts.length);
-      }
-      return results;
+      // Fallback to serial batched if worker script not found
+      process.stderr.write("Worker script not found, falling back to batched embedding\n");
+      return this.embedBatch(texts, onProgress);
     }
 
     // Split texts into chunks for each worker
@@ -253,6 +372,7 @@ export class Embedder {
             modelName: this.model,
             cacheDir: CACHE_DIR,
             runtimeLabel: this.runtimeLabel,
+            batchSize: this.batchSize,
           },
         });
 

@@ -19,6 +19,7 @@ export interface ServerOptions {
   waitForReady?: boolean;
   model?: string;
   workers?: number;
+  batchSize?: number;
   onProgress?: (embedded: number, total: number) => void;
 }
 
@@ -28,7 +29,7 @@ export async function createServer(notesPath: string, options: ServerOptions = {
 
   // Core services
   const indexer = new Indexer(notesPath);
-  const embedder = new Embedder(options.model, options.workers);
+  const embedder = new Embedder(options.model, options.workers, options.batchSize);
   const graph = new GraphBuilder();
   const textSearch = new TextSearch();
   const crud = new NoteCrud(notesPath);
@@ -102,46 +103,54 @@ export async function createServer(notesPath: string, options: ServerOptions = {
     const SAVE_INTERVAL = 100;
     const allChunks: { embedding: Float32Array; docPath: string; chunkIndex: number; text: string }[] = [];
     const cumulativeEmbeddings = new Map<string, Float32Array>(savedEmbeddings);
-    let chunksSinceLastSave = 0;
+
+    // Collect ALL pending chunks across ALL docs first so embedBatch can use full batch_size
+    type PendingChunk = { text: string; docPath: string; chunkIndex: number };
+    const pendingChunks: PendingChunk[] = [];
 
     for (const doc of newDocs) {
-      // Check which chunks already have saved embeddings
-      const chunksToEmbed: { text: string; index: number }[] = [];
       for (let i = 0; i < doc.chunks.length; i++) {
         const key = `${doc.path}:${i}`;
         const existing = cumulativeEmbeddings.get(key);
         if (existing) {
           allChunks.push({ embedding: existing, docPath: doc.path, chunkIndex: i, text: doc.chunks[i] });
         } else {
-          chunksToEmbed.push({ text: doc.chunks[i], index: i });
+          pendingChunks.push({ text: doc.chunks[i], docPath: doc.path, chunkIndex: i });
         }
       }
+    }
 
-      if (chunksToEmbed.length > 0) {
-        const embeddings = await embedder.embedBatch(
-          chunksToEmbed.map((c) => c.text),
-          (done, _total) => {
-            const current = allChunks.length + done;
-            indexProgress = { embedded: current, total: totalChunks };
-            options.onProgress?.(current, totalChunks);
+    // Seed progress with already-embedded chunks
+    indexProgress = { embedded: allChunks.length, total: totalChunks };
+
+    if (pendingChunks.length > 0) {
+      let chunksSinceLastSave = 0;
+      const alreadyEmbedded = allChunks.length;
+
+      await embedder.embedBatch(
+        pendingChunks.map((c) => c.text),
+        async (done, _total, embeddings) => {
+          // embeddings contains the just-completed sub-batch
+          if (!embeddings) return;
+          const batchStart = done - embeddings.length;
+          for (let i = 0; i < embeddings.length; i++) {
+            const { docPath, chunkIndex, text } = pendingChunks[batchStart + i];
+            const key = `${docPath}:${chunkIndex}`;
+            cumulativeEmbeddings.set(key, embeddings[i]);
+            allChunks.push({ embedding: embeddings[i], docPath, chunkIndex, text });
+            chunksSinceLastSave++;
           }
-        );
-        for (let i = 0; i < embeddings.length; i++) {
-          const { index, text } = chunksToEmbed[i];
-          const key = `${doc.path}:${index}`;
-          cumulativeEmbeddings.set(key, embeddings[i]);
-          allChunks.push({ embedding: embeddings[i], docPath: doc.path, chunkIndex: index, text });
-          chunksSinceLastSave++;
+
+          const current = alreadyEmbedded + done;
+          indexProgress = { embedded: current, total: totalChunks };
+          options.onProgress?.(current, totalChunks);
+
+          if (chunksSinceLastSave >= SAVE_INTERVAL) {
+            await embedder.saveEmbeddings(cumulativeEmbeddings, indexPath);
+            chunksSinceLastSave = 0;
+          }
         }
-      }
-
-      indexProgress = { embedded: allChunks.length, total: totalChunks };
-
-      // Incremental save every SAVE_INTERVAL new chunks
-      if (chunksSinceLastSave >= SAVE_INTERVAL) {
-        await embedder.saveEmbeddings(cumulativeEmbeddings, indexPath);
-        chunksSinceLastSave = 0;
-      }
+      );
     }
 
     const newVector = new VectorIndex(embedder.getDimensions());

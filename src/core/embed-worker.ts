@@ -6,6 +6,7 @@ interface WorkerData {
   modelName: string;
   cacheDir: string;
   runtimeLabel: "native" | "wasm";
+  batchSize: number;
 }
 
 interface WorkMessage {
@@ -36,7 +37,40 @@ interface ReadyMessage {
   type: "ready";
 }
 
-const { modelPath, modelName, cacheDir, runtimeLabel } = workerData as WorkerData;
+const { modelPath, modelName, cacheDir, runtimeLabel, batchSize = 32 } = workerData as WorkerData;
+
+function meanPoolAndNormalizeMany(
+  outputData: Float32Array,
+  maskData: number[],
+  batchSize: number,
+  seqLen: number,
+  hiddenSize: number
+): Float32Array[] {
+  const results: Float32Array[] = [];
+  for (let b = 0; b < batchSize; b++) {
+    const result = new Float32Array(hiddenSize);
+    let maskSum = 0;
+    for (let t = 0; t < seqLen; t++) {
+      const mask = maskData[b * seqLen + t];
+      maskSum += mask;
+      const offset = (b * seqLen + t) * hiddenSize;
+      for (let d = 0; d < hiddenSize; d++) {
+        result[d] += (outputData as Float32Array)[offset + d] * mask;
+      }
+    }
+    if (maskSum > 0) {
+      for (let d = 0; d < hiddenSize; d++) result[d] /= maskSum;
+    }
+    let norm = 0;
+    for (let d = 0; d < hiddenSize; d++) norm += result[d] * result[d];
+    norm = Math.sqrt(norm);
+    if (norm > 0) {
+      for (let d = 0; d < hiddenSize; d++) result[d] /= norm;
+    }
+    results.push(result);
+  }
+  return results;
+}
 
 async function init() {
   // Resolve ONNX runtime
@@ -67,60 +101,67 @@ async function init() {
 
     try {
       const embeddings: Float32Array[] = [];
+      let totalDone = 0;
 
-      for (let i = 0; i < msg.texts.length; i++) {
-        const encoded = await tokenizer(msg.texts[i], {
-          padding: true,
-          truncation: true,
-          max_length: 512,
-          return_tensor: false,
-        });
+      // Process texts in sub-batches
+      for (let i = 0; i < msg.texts.length; i += batchSize) {
+        const subBatch = msg.texts.slice(i, i + batchSize);
+        const n = subBatch.length;
 
-        const inputIdsRaw: number[] = Array.from(encoded.input_ids.data ?? encoded.input_ids);
-        const attentionMaskRaw: number[] = Array.from(encoded.attention_mask.data ?? encoded.attention_mask);
-        const seqLen = inputIdsRaw.length;
+        // Tokenize individually to avoid ambiguous batch tokenizer output format
+        const encodings = await Promise.all(
+          subBatch.map((text: string) =>
+            tokenizer(text, { padding: false, truncation: true, max_length: 512, return_tensor: false })
+          )
+        );
+        const tokenized = encodings.map((enc: any) => ({
+          ids: Array.from(enc.input_ids.data ?? enc.input_ids) as number[],
+          mask: Array.from(enc.attention_mask.data ?? enc.attention_mask) as number[],
+        }));
+        const seqLen = Math.max(...tokenized.map((t: any) => t.ids.length));
 
-        const inputIds = new ort.Tensor("int64", BigInt64Array.from(inputIdsRaw.map(BigInt)), [1, seqLen]);
-        const attentionMask = new ort.Tensor("int64", BigInt64Array.from(attentionMaskRaw.map(BigInt)), [1, seqLen]);
+        const flatIds = new BigInt64Array(n * seqLen);
+        const flatMask = new BigInt64Array(n * seqLen);
+        const flatMaskNums = new Array<number>(n * seqLen).fill(0);
+        for (let b = 0; b < n; b++) {
+          const { ids, mask } = tokenized[b];
+          for (let j = 0; j < ids.length; j++) {
+            flatIds[b * seqLen + j] = BigInt(ids[j]);
+            flatMask[b * seqLen + j] = BigInt(mask[j]);
+            flatMaskNums[b * seqLen + j] = mask[j];
+          }
+        }
+
+        const inputIds = new ort.Tensor("int64", flatIds, [n, seqLen]);
+        const attentionMask = new ort.Tensor("int64", flatMask, [n, seqLen]);
 
         const feeds: Record<string, any> = { input_ids: inputIds, attention_mask: attentionMask };
         if (needsTokenTypeIds) {
-          feeds.token_type_ids = new ort.Tensor("int64", new BigInt64Array(seqLen), [1, seqLen]);
+          feeds.token_type_ids = new ort.Tensor("int64", new BigInt64Array(n * seqLen), [n, seqLen]);
         }
 
         const output = await session.run(feeds);
         const outputTensor = output[outputName];
         const hiddenSize = outputTensor.dims[outputTensor.dims.length - 1];
 
-        // Mean pooling + L2 normalize
-        const result = new Float32Array(hiddenSize);
-        let maskSum = 0;
-        for (let t = 0; t < seqLen; t++) {
-          const mask = attentionMaskRaw[t];
-          maskSum += mask;
-          const offset = t * hiddenSize;
-          for (let d = 0; d < hiddenSize; d++) {
-            result[d] += (outputTensor.data as Float32Array)[offset + d] * mask;
-          }
-        }
-        if (maskSum > 0) {
-          for (let d = 0; d < hiddenSize; d++) result[d] /= maskSum;
-        }
-        let norm = 0;
-        for (let d = 0; d < hiddenSize; d++) norm += result[d] * result[d];
-        norm = Math.sqrt(norm);
-        if (norm > 0) {
-          for (let d = 0; d < hiddenSize; d++) result[d] /= norm;
-        }
+        const batchEmbeddings = meanPoolAndNormalizeMany(
+          outputTensor.data as Float32Array,
+          flatMaskNums,
+          n,
+          seqLen,
+          hiddenSize
+        );
 
-        embeddings.push(result);
-
-        parentPort!.postMessage({
-          type: "progress",
-          done: i + 1,
-          total: msg.texts.length,
-          startIndex: msg.startIndex,
-        } as ProgressMessage);
+        for (const emb of batchEmbeddings) {
+          embeddings.push(emb);
+          totalDone++;
+          parentPort!.postMessage({
+            type: "progress",
+            done: totalDone,
+            total: msg.texts.length,
+            startIndex: msg.startIndex,
+          } as ProgressMessage);
+        }
       }
 
       parentPort!.postMessage({
