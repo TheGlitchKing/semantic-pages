@@ -24,12 +24,10 @@ export class NoteCrud {
 
     await mkdir(dirname(absPath), { recursive: true });
 
-    let fileContent: string;
-    if (frontmatter && Object.keys(frontmatter).length > 0) {
-      fileContent = matter.stringify(content, frontmatter);
-    } else {
-      fileContent = content;
-    }
+    // Merge auto-stamps with caller-supplied frontmatter (caller wins on conflicts)
+    const stamps = computeStamps(content);
+    const merged = { ...stamps, ...(frontmatter ?? {}) };
+    const fileContent = matter.stringify(content, merged);
 
     await writeFile(absPath, fileContent, "utf-8");
     return relativePath;
@@ -92,7 +90,12 @@ export class NoteCrud {
       }
     }
 
-    await writeFile(absPath, updated, "utf-8");
+    // Re-parse the final content and inject updated stamps
+    // (preserves all existing frontmatter, only overwrites the three auto fields)
+    const { data: existingFm, content: body } = matter(updated);
+    const stamps = computeStamps(body);
+    const newFm = { ...existingFm, ...stamps };
+    await writeFile(absPath, matter.stringify(body, newFm), "utf-8");
   }
 
   async delete(relativePath: string): Promise<void> {
@@ -187,4 +190,22 @@ export class NoteCrud {
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Compute the three auto-stamp fields from note body text.
+ * These are always factual/computable — no editorial judgment required.
+ * - last_updated: today's date (YYYY-MM-DD)
+ * - word_count: whitespace-separated token count
+ * - estimated_read_time: assumes ~200 wpm average reading speed
+ */
+function computeStamps(body: string): Record<string, unknown> {
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const wordCount = body.trim() ? body.trim().split(/\s+/).length : 0;
+  const minutes = Math.max(1, Math.ceil(wordCount / 200));
+  return {
+    last_updated: today,
+    word_count: wordCount,
+    estimated_read_time: `${minutes} min read`,
+  };
 }

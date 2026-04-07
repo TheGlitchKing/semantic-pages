@@ -1,6 +1,6 @@
 {
   "name": "@theglitchking/semantic-pages",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "description": "Semantic search + knowledge graph MCP server for any folder of markdown files",
   "type": "module",
   "main": "./dist/core/index.js",
