@@ -15,6 +15,7 @@ export interface IndexedDocument {
   tier?: string;           // guide | standard | example | reference | admin
   domains?: string[];      // domain categories e.g. ["api", "security"]
   purpose?: string;        // one-sentence summary for richer search context
+  relatedDocs?: string[];  // explicit related doc paths from frontmatter (related_docs field)
 }
 
 export interface SearchResult {
@@ -36,6 +37,8 @@ export interface GraphNode {
   tags: string[];
   linkCount: number;
   backlinkCount: number;
+  loadPriority?: number;  // present when frontmatter load_priority is set
+  status?: string;        // present when frontmatter status is set
 }
 
 export interface GraphEdge {

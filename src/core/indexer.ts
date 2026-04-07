@@ -66,6 +66,9 @@ export class Indexer {
       : undefined;
     const purpose =
       typeof frontmatter.purpose === "string" ? frontmatter.purpose : undefined;
+    const relatedDocs = Array.isArray(frontmatter.related_docs)
+      ? (frontmatter.related_docs as string[]).filter((v) => typeof v === "string")
+      : undefined;
 
     return {
       path: relativePath,
@@ -82,6 +85,7 @@ export class Indexer {
       ...(tier !== undefined && { tier }),
       ...(domains !== undefined && { domains }),
       ...(purpose !== undefined && { purpose }),
+      ...(relatedDocs !== undefined && { relatedDocs }),
     };
   }
 

@@ -324,11 +324,15 @@ export async function createServer(notesPath: string, options: ServerOptions = {
 
   server.tool(
     "search_graph",
-    "Graph traversal — find notes connected to a concept via wikilinks and tags",
-    { concept: z.string(), maxDepth: z.coerce.number().optional().default(2) },
-    async ({ concept, maxDepth }) => {
+    "Graph traversal — find notes connected to a concept via wikilinks, related_docs, and specific tags. Results ranked by directness, load_priority, and degree.",
+    {
+      concept: z.string(),
+      maxDepth: z.coerce.number().optional().default(2),
+      limit: z.coerce.number().optional().default(20),
+    },
+    async ({ concept, maxDepth, limit }) => {
       if (documents.length === 0 && indexState !== "ready") return textResponse(indexingMessage());
-      const results = graph.searchGraph(concept, maxDepth);
+      const results = graph.searchGraph(concept, maxDepth, limit);
       return textResponse(JSON.stringify(results, null, 2));
     }
   );
