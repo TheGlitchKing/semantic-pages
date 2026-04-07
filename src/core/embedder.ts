@@ -15,15 +15,23 @@ const CACHE_DIR = join(homedir(), ".semantic-pages", "models");
 // with <4 GB free RAM, parallel workers cause swap thrashing and are 3x slower.
 // Enable with --workers N when you have sufficient RAM (N * ~400 MB free).
 const DEFAULT_WORKERS = 1;
-// Number of texts to embed in a single ONNX forward pass.
-// Transformers process batches nearly as fast as a single sample, so batching
-// reduces 2,853 ONNX calls to ~90 calls (batch_size=32) — ~16x faster.
-const DEFAULT_BATCH_SIZE = 32;
+// Batch size of 8 balances batching benefit vs padding overhead on CPU.
+// Large batches (32+) cause seqLen to pad to the max in the batch, wasting compute.
+const DEFAULT_BATCH_SIZE = 8;
+// Use quantized model by default — int8 quantization is ~4x faster on CPU
+// with negligible quality loss for retrieval tasks.
+const DEFAULT_QUANTIZED = true;
 
-// ONNX model file paths per known model
+// Full-precision ONNX model subpaths
 const ONNX_MODEL_PATHS: Record<string, string> = {
   "nomic-ai/nomic-embed-text-v1.5": "onnx/model.onnx",
   "sentence-transformers/all-MiniLM-L6-v2": "onnx/model.onnx",
+};
+
+// Quantized (int8) ONNX model subpaths — faster on CPU, ~same quality
+const ONNX_QUANTIZED_MODEL_PATHS: Record<string, string> = {
+  "nomic-ai/nomic-embed-text-v1.5": "onnx/model_quantized.onnx",
+  "sentence-transformers/all-MiniLM-L6-v2": "onnx/model_quantized.onnx",
 };
 
 interface OrtSession {
@@ -69,16 +77,19 @@ export class Embedder {
   private initialized = false;
   private numWorkers: number;
   private batchSize: number;
+  private quantized: boolean;
   private modelPath = "";
 
   constructor(
     model: string = DEFAULT_MODEL,
     numWorkers: number = DEFAULT_WORKERS,
-    batchSize: number = DEFAULT_BATCH_SIZE
+    batchSize: number = DEFAULT_BATCH_SIZE,
+    quantized: boolean = DEFAULT_QUANTIZED
   ) {
     this.model = model;
     this.numWorkers = numWorkers;
     this.batchSize = batchSize;
+    this.quantized = quantized;
   }
 
   async init(): Promise<void> {
@@ -93,12 +104,14 @@ export class Embedder {
     this.runtimeLabel = label;
 
     // Download ONNX model if not cached
-    this.modelPath = join(modelDir, "model.onnx");
+    const modelFileName = this.quantized ? "model_quantized.onnx" : "model.onnx";
+    this.modelPath = join(modelDir, modelFileName);
     const modelPath = this.modelPath;
     if (!existsSync(modelPath)) {
-      const onnxSubpath = ONNX_MODEL_PATHS[this.model] ?? "onnx/model.onnx";
+      const pathMap = this.quantized ? ONNX_QUANTIZED_MODEL_PATHS : ONNX_MODEL_PATHS;
+      const onnxSubpath = pathMap[this.model] ?? (this.quantized ? "onnx/model_quantized.onnx" : "onnx/model.onnx");
       const url = `https://huggingface.co/${this.model}/resolve/main/${onnxSubpath}`;
-      process.stderr.write(`Downloading ONNX model: ${this.model}...\n`);
+      process.stderr.write(`Downloading ONNX model: ${this.model} (${this.quantized ? "quantized" : "full precision"})...\n`);
       await downloadFile(url, modelPath);
       process.stderr.write(`Model downloaded to ${modelDir}\n`);
     }
@@ -118,7 +131,7 @@ export class Embedder {
     this.dimensions = test.length;
     this.initialized = true;
 
-    process.stderr.write(`Embedder ready (${label} runtime, ${this.dimensions}d, batch_size=${this.batchSize})\n`);
+    process.stderr.write(`Embedder ready (${label} runtime, ${this.dimensions}d, batch_size=${this.batchSize}, ${this.quantized ? "quantized" : "fp32"})\n`);
   }
 
   async embed(text: string): Promise<Float32Array> {

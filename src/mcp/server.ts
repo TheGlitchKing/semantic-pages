@@ -20,6 +20,7 @@ export interface ServerOptions {
   model?: string;
   workers?: number;
   batchSize?: number;
+  quantized?: boolean;
   onProgress?: (embedded: number, total: number) => void;
 }
 
@@ -29,7 +30,7 @@ export async function createServer(notesPath: string, options: ServerOptions = {
 
   // Core services
   const indexer = new Indexer(notesPath);
-  const embedder = new Embedder(options.model, options.workers, options.batchSize);
+  const embedder = new Embedder(options.model, options.workers, options.batchSize, options.quantized);
   const graph = new GraphBuilder();
   const textSearch = new TextSearch();
   const crud = new NoteCrud(notesPath);

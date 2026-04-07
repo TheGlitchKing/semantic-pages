@@ -216,7 +216,7 @@ program
     "  List MCP tools:    semantic-pages tools\n" +
     "  Tool details:      semantic-pages tools search_semantic"
   )
-  .version("0.4.1");
+  .version("0.4.2");
 
 program
   .command("tools [name]")
@@ -238,7 +238,8 @@ program
   .option("--stats", "Show vault statistics and exit")
   .option("--model <name>", "Embedding model to use", "nomic-ai/nomic-embed-text-v1.5")
   .option("--workers <n>", "Number of worker threads for parallel embedding", parseInt)
-  .option("--batch-size <n>", "Texts per ONNX forward pass (default: 32)", parseInt)
+  .option("--batch-size <n>", "Texts per ONNX forward pass (default: 8)", parseInt)
+  .option("--no-quantized", "Use full-precision model instead of quantized (slower, slightly higher quality)")
   .option("--no-watch", "Disable file watcher")
   .action(async (opts) => {
     const notesPath = resolve(opts.notes);
@@ -267,6 +268,7 @@ program
         model: opts.model,
         workers: opts.workers,
         batchSize: opts.batchSize,
+        quantized: opts.quantized,
         onProgress: (embedded, total) => {
           process.stderr.write(`\rEmbedding ${embedded}/${total} chunks...`);
         },
@@ -278,7 +280,7 @@ program
 
     // Default: start MCP server on stdio
     const { startServer } = await import("../mcp/server.js");
-    await startServer(notesPath, { watch: opts.watch, model: opts.model, workers: opts.workers, batchSize: opts.batchSize });
+    await startServer(notesPath, { watch: opts.watch, model: opts.model, workers: opts.workers, batchSize: opts.batchSize, quantized: opts.quantized });
   });
 
 program.parse();
