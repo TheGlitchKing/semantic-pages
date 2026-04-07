@@ -87,9 +87,10 @@ export class GraphBuilder {
       .nodes()
       .filter((n) => {
         const attrs = this.graph.getNodeAttributes(n);
+        const title = typeof attrs.title === "string" ? attrs.title : String(attrs.title ?? "");
         return (
           n.toLowerCase().includes(concept.toLowerCase()) ||
-          attrs.title?.toLowerCase().includes(concept.toLowerCase()) ||
+          title.toLowerCase().includes(concept.toLowerCase()) ||
           attrs.tags?.some((t: string) => t.toLowerCase().includes(concept.toLowerCase()))
         );
       });

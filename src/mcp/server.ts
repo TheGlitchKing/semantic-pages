@@ -269,7 +269,7 @@ export async function createServer(notesPath: string, options: ServerOptions = {
     "Vector similarity search — find notes similar to a query by meaning. Scores are boosted by load_priority when present.",
     {
       query: z.string(),
-      limit: z.number().optional().default(10),
+      limit: z.coerce.number().optional().default(10),
       modifiedAfter: z.string().optional().describe("ISO date — only return notes modified after this date (e.g. '2026-01-01')"),
       modifiedBefore: z.string().optional().describe("ISO date — only return notes modified before this date"),
       status: z.string().optional().describe("Filter by frontmatter status (e.g. 'active', 'draft')"),
@@ -303,7 +303,7 @@ export async function createServer(notesPath: string, options: ServerOptions = {
       caseSensitive: z.boolean().optional().default(false),
       pathGlob: z.string().optional(),
       tagFilter: z.array(z.string()).optional(),
-      limit: z.number().optional().default(20),
+      limit: z.coerce.number().optional().default(20),
       modifiedAfter: z.string().optional().describe("ISO date — only return notes modified after this date"),
       modifiedBefore: z.string().optional().describe("ISO date — only return notes modified before this date"),
       status: z.string().optional().describe("Filter by frontmatter status"),
@@ -325,7 +325,7 @@ export async function createServer(notesPath: string, options: ServerOptions = {
   server.tool(
     "search_graph",
     "Graph traversal — find notes connected to a concept via wikilinks and tags",
-    { concept: z.string(), maxDepth: z.number().optional().default(2) },
+    { concept: z.string(), maxDepth: z.coerce.number().optional().default(2) },
     async ({ concept, maxDepth }) => {
       if (documents.length === 0 && indexState !== "ready") return textResponse(indexingMessage());
       const results = graph.searchGraph(concept, maxDepth);
@@ -338,7 +338,7 @@ export async function createServer(notesPath: string, options: ServerOptions = {
     "Combined semantic + graph search — vector results re-ranked by graph proximity and load_priority",
     {
       query: z.string(),
-      limit: z.number().optional().default(10),
+      limit: z.coerce.number().optional().default(10),
       modifiedAfter: z.string().optional().describe("ISO date — only return notes modified after this date"),
       modifiedBefore: z.string().optional().describe("ISO date — only return notes modified before this date"),
       status: z.string().optional().describe("Filter by frontmatter status"),
@@ -552,10 +552,10 @@ export async function createServer(notesPath: string, options: ServerOptions = {
   server.tool(
     "backlinks",
     "Find all notes that link TO a given note",
-    { path: z.string() },
-    async ({ path }) => {
+    { path: z.string(), limit: z.coerce.number().optional().default(50) },
+    async ({ path, limit }) => {
       if (documents.length === 0 && indexState !== "ready") return textResponse(indexingMessage());
-      const results = graph.backlinks(path);
+      const results = graph.backlinks(path).slice(0, limit);
       return textResponse(JSON.stringify(results, null, 2));
     }
   );
@@ -563,10 +563,10 @@ export async function createServer(notesPath: string, options: ServerOptions = {
   server.tool(
     "forwardlinks",
     "Find all notes linked FROM a given note",
-    { path: z.string() },
-    async ({ path }) => {
+    { path: z.string(), limit: z.coerce.number().optional().default(50) },
+    async ({ path, limit }) => {
       if (documents.length === 0 && indexState !== "ready") return textResponse(indexingMessage());
-      const results = graph.forwardlinks(path);
+      const results = graph.forwardlinks(path).slice(0, limit);
       return textResponse(JSON.stringify(results, null, 2));
     }
   );
