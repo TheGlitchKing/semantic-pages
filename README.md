@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > [!IMPORTANT]
-> Semantic Pages runs a local embedding model (~80MB) on first launch. This download happens once and is cached at `~/.semantic-pages/models/`. No API key required. No data leaves your machine.
+> Semantic Pages runs a local embedding model (~22MB) on first launch. This download happens once and is cached at `~/.semantic-pages/models/`. No API key required. No data leaves your machine.
 
 ---
 
@@ -18,7 +18,7 @@ When you have markdown notes scattered across a project — a `vault/`, `docs/`,
 
 ## Operational Summary
 
-The server indexes all `.md` files in a directory you point it at. Each file is parsed for YAML frontmatter, `[[wikilinks]]`, `#tags`, and headings. The text content is split into ~512-token chunks and embedded locally using the `nomic-embed-text-v1.5` model running via WebAssembly in Node.js. These embeddings are stored in an HNSW index for fast approximate nearest neighbor search. Simultaneously, a directed graph is built from wikilinks and shared tags using graphology.
+The server indexes all `.md` files in a directory you point it at. Each file is parsed for YAML frontmatter, `[[wikilinks]]`, `#tags`, and headings. The text content is split into chunks and embedded locally using `all-MiniLM-L6-v2` — a 22MB model that runs natively in Node.js via ONNX. These embeddings are stored in an HNSW index for fast approximate nearest neighbor search. Simultaneously, a directed graph is built from wikilinks and shared tags using graphology.
 
 When Claude calls `search_semantic`, the query is embedded and compared against all chunks via cosine similarity. When Claude calls `search_graph`, it does a breadth-first traversal from matching nodes. `search_hybrid` combines both — semantic results re-ranked by graph proximity. Beyond search, Claude can create, read, update, delete, and move notes, manage YAML frontmatter fields, add/remove/rename tags vault-wide, and query the knowledge graph for backlinks, forwardlinks, shortest paths, and connectivity statistics.
 
@@ -223,7 +223,7 @@ semantic-pages --notes ./vault --reindex
 - If the index seems stale or corrupted
 - After changing the embedding model
 
-**What to expect**: Full re-parse, re-embed, and re-index of all markdown files. Takes 10-60 seconds depending on vault size and whether the model is cached.
+**What to expect**: Full re-parse, re-embed, and re-index of all markdown files. Takes 30 seconds to ~20 minutes depending on vault size and hardware. See [Performance Tuning](./.documentation/performance-tuning.md) for details.
 
 ---
 
@@ -480,8 +480,8 @@ src/
 | Markdown parsing | `unified` + `remark-parse` | AST-based, handles wikilinks |
 | Frontmatter | `gray-matter` | YAML/TOML frontmatter extraction |
 | Wikilinks | `remark-wiki-link` | `[[note-name]]` extraction from AST |
-| Embeddings | `@huggingface/transformers` | WASM runtime, no Python, no API key |
-| Embedding model | `nomic-embed-text-v1.5` | High quality, ~80MB, runs locally |
+| Embeddings | `@huggingface/transformers` + `onnxruntime-node` | Native ONNX runtime, no Python, no API key |
+| Embedding model | `all-MiniLM-L6-v2` (default) | ~22MB, fast (~3 min / 3K chunks), excellent retrieval quality |
 | Vector index | `hnswlib-node` | HNSW algorithm, same as production vector DBs |
 | Knowledge graph | `graphology` | Directed graph, serializable, rich algorithms |
 | Graph algorithms | `graphology-traversal` + `graphology-shortest-path` | BFS, shortest path |
@@ -519,7 +519,7 @@ Plain text → split at sentence boundaries → ~512 token chunks
 
 #### Step 3: Embed
 ```
-Each chunk → nomic-embed-text-v1.5 (WASM) → normalized Float32Array
+Each chunk → all-MiniLM-L6-v2 (native ONNX) → normalized Float32Array
 ```
 
 #### Step 4: Index
@@ -573,14 +573,16 @@ const path = graph.findPath("overview.md", "auth.md");
 
 | Metric | Value |
 |--------|-------|
-| Index 100 notes | ~5 seconds |
-| Index 1,000 notes | ~30 seconds |
+| Index 100 notes (~600 chunks) | ~30 seconds |
+| Index 500 notes (~3,000 chunks) | ~3–5 minutes |
+| Index 2,000 notes (~12,000 chunks) | ~15–20 minutes |
 | Semantic search latency | <100ms |
 | Text search latency | <10ms |
 | Graph traversal latency | <5ms |
-| Model download (first run) | ~80MB, cached at `~/.semantic-pages/models/` |
-| Index size (100 notes) | ~10MB |
-| npm package size | 85.7 kB |
+| Subsequent server starts (warm cache) | <1 second |
+| Model download (first run) | ~22MB, cached at `~/.semantic-pages/models/` |
+| Index size (500 notes) | ~30–50MB |
+| npm package size | ~112 kB |
 
 ---
 
@@ -589,6 +591,18 @@ const path = graph.findPath("overview.md", "auth.md");
 - **Node.js**: Version 18.0.0 or higher
 - **Operating System**: Linux, macOS, or Windows (with WSL2)
 - **Disk Space**: ~80MB for the embedding model (downloaded once)
+
+---
+
+## Documentation
+
+Deep-dive guides are in [`.documentation/`](./.documentation/):
+
+- [**How It Works**](./.documentation/how-it-works.md) — architecture, processing pipeline, index format, search mechanics
+- [**Performance Tuning**](./.documentation/performance-tuning.md) — model selection, batch size, workers, benchmarks
+- [**Embedder Guide**](./.documentation/embedder-guide.md) — when/how to tune the embedder, model switching, cache management
+- [**Troubleshooting**](./.documentation/troubleshooting.md) — common problems and fixes
+- [**Changelog**](./.documentation/changelog.md) — version history with rationale
 
 ---
 
