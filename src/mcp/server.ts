@@ -509,16 +509,24 @@ export async function createServer(notesPath: string, options: ServerOptions = {
     }
   );
 
-  // --- Startup: load cached index; only reindex if no valid cache found ---
-  const cached = await tryLoadCachedIndex();
+  // --- Startup ---
   if (options.waitForReady) {
-    // Blocking mode (CLI --reindex): always do a full index before returning
+    // Blocking mode (CLI --reindex): load model + do full index before returning
+    await tryLoadCachedIndex();
     await fullIndex();
-  } else if (!cached) {
-    // No valid cache — index in background so the server becomes usable quickly
-    backgroundIndex();
+  } else {
+    // MCP serve mode: return the server immediately so the transport can connect.
+    // Model load + cache load happen in background — tools return "Indexing in
+    // progress" until ready. This prevents MCP client timeout on slow machines.
+    tryLoadCachedIndex()
+      .then((cached) => {
+        if (!cached) backgroundIndex();
+      })
+      .catch((err) => {
+        process.stderr.write(`Startup error: ${err?.message ?? err}\n`);
+        backgroundIndex();
+      });
   }
-  // If cache loaded, serve immediately. File watcher handles incremental updates.
 
   // File watcher
   if (options.watch !== false) {
