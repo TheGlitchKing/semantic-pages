@@ -506,11 +506,16 @@ src/
 ```
 .md file → gray-matter (frontmatter) → remark (AST) → extract:
   - title (frontmatter > first heading > filename)
+  - mtime (frontmatter last_updated/updated/date/lastmod → fs.stat mtime)
   - wikilinks ([[note-name]])
   - tags (frontmatter tags: + inline #tags)
   - headers (H1-H6)
   - plain text (markdown stripped)
 ```
+
+**Frontmatter is optional.** Every note gets a modification timestamp regardless — resolved from frontmatter date fields if present, otherwise from the file's `fs.stat` mtime. When frontmatter fields like `status`, `tier`, `domains`, `load_priority`, or `purpose` are present, they're indexed and exposed through all search tools as filters and score boosters. Plain notes with no frontmatter work exactly as before.
+
+If you want structured frontmatter with a full schema (22 fields, 15 domains, health scoring), [**hit-em-with-the-docs**](https://github.com/TheGlitchKing/hit-em-with-the-docs) is a companion tool that manages docs for Claude Code projects — its schema is natively understood by Semantic Pages.
 
 #### Step 2: Chunk
 ```
@@ -599,6 +604,7 @@ const path = graph.findPath("overview.md", "auth.md");
 Deep-dive guides are in [`.documentation/`](./.documentation/):
 
 - [**How It Works**](./.documentation/how-it-works.md) — architecture, processing pipeline, index format, search mechanics
+- [**Frontmatter Guide**](./.documentation/frontmatter-guide.md) — timestamps, load_priority boosting, status/tier/domain filters, hit-em-with-the-docs compatibility
 - [**Performance Tuning**](./.documentation/performance-tuning.md) — model selection, batch size, workers, benchmarks
 - [**Embedder Guide**](./.documentation/embedder-guide.md) — when/how to tune the embedder, model switching, cache management
 - [**Troubleshooting**](./.documentation/troubleshooting.md) — common problems and fixes
