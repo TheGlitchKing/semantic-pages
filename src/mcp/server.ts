@@ -38,6 +38,7 @@ export async function createServer(notesPath: string, options: ServerOptions = {
   const tagManager = new TagManager(notesPath);
 
   let documents: IndexedDocument[] = [];
+  let docByPath = new Map<string, IndexedDocument>();
   let vectorIndex: VectorIndex | null = null;
   let indexState: IndexState = "empty";
   let indexProgress = { embedded: 0, total: 0 };
@@ -69,6 +70,7 @@ export async function createServer(notesPath: string, options: ServerOptions = {
       if (!graphLoaded) return false;
 
       documents = await indexer.indexAll();
+      docByPath = new Map(documents.map((d) => [d.path, d]));
       textSearch.setDocuments(documents);
 
       vectorIndex = tempVector;
@@ -162,6 +164,7 @@ export async function createServer(notesPath: string, options: ServerOptions = {
 
     // Atomic swap — all state updated together
     documents = newDocs;
+    docByPath = new Map(documents.map((d) => [d.path, d]));
     textSearch.setDocuments(newDocs);
     graph.buildFromDocuments(newDocs);
     vectorIndex = newVector;
@@ -204,6 +207,56 @@ export async function createServer(notesPath: string, options: ServerOptions = {
     return "Indexing in progress... Try again shortly.";
   }
 
+  // --- Result enrichment & filtering helpers ---
+
+  /** Attach mtime and optional frontmatter metadata from the live document index */
+  function enrichResult<T extends { path: string }>(result: T): T & {
+    mtime?: string;
+    loadPriority?: number;
+    status?: string;
+    tier?: string;
+    domains?: string[];
+  } {
+    const doc = docByPath.get(result.path);
+    if (!doc) return result;
+    return {
+      ...result,
+      mtime: doc.mtime,
+      ...(doc.loadPriority !== undefined && { loadPriority: doc.loadPriority }),
+      ...(doc.status !== undefined && { status: doc.status }),
+      ...(doc.tier !== undefined && { tier: doc.tier }),
+      ...(doc.domains !== undefined && { domains: doc.domains }),
+    };
+  }
+
+  /**
+   * Boost score by load_priority (1-10).
+   * A priority-10 doc gets +20% on top of its semantic score;
+   * priority-1 gets -18%. Docs without load_priority are unaffected.
+   */
+  function applyPriorityBoost(score: number, path: string): number {
+    const doc = docByPath.get(path);
+    if (doc?.loadPriority === undefined) return score;
+    return score * (1 + (doc.loadPriority - 5) * 0.04);
+  }
+
+  /** Filter results by optional ISO date window (modifiedAfter / modifiedBefore) */
+  function applyDateFilter<T extends { path: string }>(
+    results: T[],
+    modifiedAfter?: string,
+    modifiedBefore?: string
+  ): T[] {
+    if (!modifiedAfter && !modifiedBefore) return results;
+    const after = modifiedAfter ? new Date(modifiedAfter).getTime() : -Infinity;
+    const before = modifiedBefore ? new Date(modifiedBefore).getTime() : Infinity;
+    return results.filter((r) => {
+      const doc = docByPath.get(r.path);
+      if (!doc) return true; // don't drop results we can't check
+      const t = new Date(doc.mtime).getTime();
+      return t >= after && t <= before;
+    });
+  }
+
   // MCP Server
   const server = new McpServer({
     name: "semantic-pages",
@@ -213,13 +266,31 @@ export async function createServer(notesPath: string, options: ServerOptions = {
   // --- Search tools ---
   server.tool(
     "search_semantic",
-    "Vector similarity search — find notes similar to a query by meaning",
-    { query: z.string(), limit: z.number().optional().default(10) },
-    async ({ query, limit }) => {
+    "Vector similarity search — find notes similar to a query by meaning. Scores are boosted by load_priority when present.",
+    {
+      query: z.string(),
+      limit: z.number().optional().default(10),
+      modifiedAfter: z.string().optional().describe("ISO date — only return notes modified after this date (e.g. '2026-01-01')"),
+      modifiedBefore: z.string().optional().describe("ISO date — only return notes modified before this date"),
+      status: z.string().optional().describe("Filter by frontmatter status (e.g. 'active', 'draft')"),
+      tier: z.string().optional().describe("Filter by frontmatter tier (e.g. 'guide', 'reference')"),
+      domain: z.string().optional().describe("Filter by frontmatter domain (e.g. 'api', 'security')"),
+    },
+    async ({ query, limit, modifiedAfter, modifiedBefore, status, tier, domain }) => {
       if (!vectorIndex) return textResponse(indexState === "empty" ? indexingMessage() : "Index not built. Run reindex first.");
       const queryEmbed = await embedder.embed(query);
-      const results = vectorIndex.search(queryEmbed, limit);
-      return textResponse(JSON.stringify(results, null, 2));
+      // Fetch extra results to compensate for post-filtering
+      let results = vectorIndex.search(queryEmbed, limit * 3);
+      // Apply load_priority boost then re-sort
+      results = results.map((r) => ({ ...r, score: applyPriorityBoost(r.score, r.path) }));
+      results.sort((a, b) => b.score - a.score);
+      // Date + metadata filters
+      results = applyDateFilter(results, modifiedAfter, modifiedBefore);
+      if (status) results = results.filter((r) => docByPath.get(r.path)?.status === status);
+      if (tier) results = results.filter((r) => docByPath.get(r.path)?.tier === tier);
+      if (domain) results = results.filter((r) => docByPath.get(r.path)?.domains?.includes(domain));
+      const enriched = results.slice(0, limit).map(enrichResult);
+      return textResponse(JSON.stringify(enriched, null, 2));
     }
   );
 
@@ -233,11 +304,21 @@ export async function createServer(notesPath: string, options: ServerOptions = {
       pathGlob: z.string().optional(),
       tagFilter: z.array(z.string()).optional(),
       limit: z.number().optional().default(20),
+      modifiedAfter: z.string().optional().describe("ISO date — only return notes modified after this date"),
+      modifiedBefore: z.string().optional().describe("ISO date — only return notes modified before this date"),
+      status: z.string().optional().describe("Filter by frontmatter status"),
+      tier: z.string().optional().describe("Filter by frontmatter tier"),
+      domain: z.string().optional().describe("Filter by frontmatter domain"),
     },
-    async (opts) => {
+    async ({ modifiedAfter, modifiedBefore, status, tier, domain, ...opts }) => {
       if (documents.length === 0 && indexState !== "ready") return textResponse(indexingMessage());
-      const results = textSearch.search(opts);
-      return textResponse(JSON.stringify(results, null, 2));
+      let results = textSearch.search(opts);
+      results = applyDateFilter(results, modifiedAfter, modifiedBefore);
+      if (status) results = results.filter((r) => docByPath.get(r.path)?.status === status);
+      if (tier) results = results.filter((r) => docByPath.get(r.path)?.tier === tier);
+      if (domain) results = results.filter((r) => docByPath.get(r.path)?.domains?.includes(domain));
+      const enriched = results.map(enrichResult);
+      return textResponse(JSON.stringify(enriched, null, 2));
     }
   );
 
@@ -254,24 +335,41 @@ export async function createServer(notesPath: string, options: ServerOptions = {
 
   server.tool(
     "search_hybrid",
-    "Combined semantic + graph search — vector results re-ranked by graph proximity",
-    { query: z.string(), limit: z.number().optional().default(10) },
-    async ({ query, limit }) => {
+    "Combined semantic + graph search — vector results re-ranked by graph proximity and load_priority",
+    {
+      query: z.string(),
+      limit: z.number().optional().default(10),
+      modifiedAfter: z.string().optional().describe("ISO date — only return notes modified after this date"),
+      modifiedBefore: z.string().optional().describe("ISO date — only return notes modified before this date"),
+      status: z.string().optional().describe("Filter by frontmatter status"),
+      tier: z.string().optional().describe("Filter by frontmatter tier"),
+      domain: z.string().optional().describe("Filter by frontmatter domain"),
+    },
+    async ({ query, limit, modifiedAfter, modifiedBefore, status, tier, domain }) => {
       if (!vectorIndex) return textResponse(indexState === "empty" ? indexingMessage() : "Index not built. Run reindex first.");
 
       const queryEmbed = await embedder.embed(query);
-      const semanticResults = vectorIndex.search(queryEmbed, limit * 2);
+      const semanticResults = vectorIndex.search(queryEmbed, limit * 3);
       const graphResults = graph.searchGraph(query, 2);
       const graphPaths = new Set(graphResults.map((r) => r.path));
 
-      // Re-rank: boost semantic results that also appear in graph
-      const hybrid = semanticResults.map((r) => ({
+      // Re-rank: graph proximity + load_priority boost
+      let hybrid = semanticResults.map((r) => ({
         ...r,
-        score: graphPaths.has(r.path) ? r.score * 1.3 : r.score,
+        score: applyPriorityBoost(
+          graphPaths.has(r.path) ? r.score * 1.3 : r.score,
+          r.path
+        ),
       }));
       hybrid.sort((a, b) => b.score - a.score);
 
-      return textResponse(JSON.stringify(hybrid.slice(0, limit), null, 2));
+      hybrid = applyDateFilter(hybrid, modifiedAfter, modifiedBefore);
+      if (status) hybrid = hybrid.filter((r) => docByPath.get(r.path)?.status === status);
+      if (tier) hybrid = hybrid.filter((r) => docByPath.get(r.path)?.tier === tier);
+      if (domain) hybrid = hybrid.filter((r) => docByPath.get(r.path)?.domains?.includes(domain));
+
+      const enriched = hybrid.slice(0, limit).map(enrichResult);
+      return textResponse(JSON.stringify(enriched, null, 2));
     }
   );
 
@@ -300,17 +398,42 @@ export async function createServer(notesPath: string, options: ServerOptions = {
 
   server.tool(
     "list_notes",
-    "List all indexed notes with metadata (title, tags, link count)",
-    {},
-    async () => {
+    "List all indexed notes with metadata (title, tags, timestamps, link count). Supports filtering by date, status, tier, and domain.",
+    {
+      modifiedAfter: z.string().optional().describe("ISO date — only return notes modified after this date (e.g. '2026-01-01')"),
+      modifiedBefore: z.string().optional().describe("ISO date — only return notes modified before this date"),
+      status: z.string().optional().describe("Filter by frontmatter status (e.g. 'active', 'deprecated')"),
+      tier: z.string().optional().describe("Filter by frontmatter tier (e.g. 'guide', 'reference')"),
+      domain: z.string().optional().describe("Filter by frontmatter domain (e.g. 'api', 'security')"),
+    },
+    async ({ modifiedAfter, modifiedBefore, status, tier, domain }) => {
       if (documents.length === 0 && indexState !== "ready") return textResponse(indexingMessage());
-      const list = documents.map((d) => ({
-        path: d.path,
-        title: d.title,
-        tags: d.tags,
-        wikilinks: d.wikilinks.length,
-        chunks: d.chunks.length,
-      }));
+      const after = modifiedAfter ? new Date(modifiedAfter).getTime() : -Infinity;
+      const before = modifiedBefore ? new Date(modifiedBefore).getTime() : Infinity;
+
+      let list = documents
+        .filter((d) => {
+          const t = new Date(d.mtime).getTime();
+          if (t < after || t > before) return false;
+          if (status && d.status !== status) return false;
+          if (tier && d.tier !== tier) return false;
+          if (domain && !d.domains?.includes(domain)) return false;
+          return true;
+        })
+        .map((d) => ({
+          path: d.path,
+          title: d.title,
+          mtime: d.mtime,
+          tags: d.tags,
+          wikilinks: d.wikilinks.length,
+          chunks: d.chunks.length,
+          ...(d.loadPriority !== undefined && { loadPriority: d.loadPriority }),
+          ...(d.status !== undefined && { status: d.status }),
+          ...(d.tier !== undefined && { tier: d.tier }),
+          ...(d.domains !== undefined && { domains: d.domains }),
+          ...(d.purpose !== undefined && { purpose: d.purpose }),
+        }));
+
       return textResponse(JSON.stringify(list, null, 2));
     }
   );

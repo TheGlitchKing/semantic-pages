@@ -3,7 +3,7 @@ import remarkParse from "remark-parse";
 import remarkWikiLink from "remark-wiki-link";
 import matter from "gray-matter";
 import { glob } from "glob";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 import type { IndexedDocument } from "./types.js";
 
@@ -30,7 +30,10 @@ export class Indexer {
     absolutePath: string,
     relativePath: string
   ): Promise<IndexedDocument> {
-    const raw = await readFile(absolutePath, "utf-8");
+    const [raw, fileStat] = await Promise.all([
+      readFile(absolutePath, "utf-8"),
+      stat(absolutePath),
+    ]);
     const { data: frontmatter, content } = matter(raw);
     const tree = this.processor.parse(content);
 
@@ -45,6 +48,25 @@ export class Indexer {
       headers[0] ||
       basename(relativePath, ".md");
 
+    // Resolve modification time: prefer frontmatter date fields over fs.stat
+    // Supports hit-em-with-the-docs (last_updated) and common alternatives
+    const mtime = this.resolveMtime(frontmatter, fileStat.mtime);
+
+    // Optional hit-em-with-the-docs fields (only populated when present)
+    const loadPriority =
+      typeof frontmatter.load_priority === "number"
+        ? Math.min(10, Math.max(1, frontmatter.load_priority))
+        : undefined;
+    const status =
+      typeof frontmatter.status === "string" ? frontmatter.status : undefined;
+    const tier =
+      typeof frontmatter.tier === "string" ? frontmatter.tier : undefined;
+    const domains = Array.isArray(frontmatter.domains)
+      ? (frontmatter.domains as string[])
+      : undefined;
+    const purpose =
+      typeof frontmatter.purpose === "string" ? frontmatter.purpose : undefined;
+
     return {
       path: relativePath,
       title,
@@ -54,7 +76,37 @@ export class Indexer {
       tags,
       headers,
       chunks,
+      mtime,
+      ...(loadPriority !== undefined && { loadPriority }),
+      ...(status !== undefined && { status }),
+      ...(tier !== undefined && { tier }),
+      ...(domains !== undefined && { domains }),
+      ...(purpose !== undefined && { purpose }),
     };
+  }
+
+  /**
+   * Resolve the best available modification date for a document.
+   * Priority: last_updated → updated → date → lastmod → fs.stat mtime
+   * Accepts YYYY-MM-DD strings or full ISO timestamps.
+   */
+  private resolveMtime(
+    frontmatter: Record<string, unknown>,
+    statMtime: Date
+  ): string {
+    const candidates = [
+      frontmatter.last_updated,
+      frontmatter.updated,
+      frontmatter.date,
+      frontmatter.lastmod,
+    ];
+    for (const val of candidates) {
+      if (!val) continue;
+      const str = val instanceof Date ? val.toISOString() : String(val);
+      const parsed = new Date(str);
+      if (!isNaN(parsed.getTime())) return parsed.toISOString();
+    }
+    return statMtime.toISOString();
   }
 
   private extractWikilinks(tree: any): string[] {
