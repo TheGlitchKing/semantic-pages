@@ -2,25 +2,28 @@ import { AutoTokenizer } from "@huggingface/transformers";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { existsSync, createWriteStream } from "node:fs";
-import { homedir, cpus } from "node:os";
+import { homedir } from "node:os";
 import { Readable } from "node:stream";
 import { pipeline as streamPipeline } from "node:stream/promises";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 
-const DEFAULT_MODEL = "nomic-ai/nomic-embed-text-v1.5";
+// MiniLM-L6-v2 is the default: ~3 min to index 2,853 chunks on CPU vs ~16 min for nomic.
+// nomic-embed-text-v1.5 gives higher quality embeddings but is much slower on CPU.
+const DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2";
 const CACHE_DIR = join(homedir(), ".semantic-pages", "models");
 // Default to 1 worker (serial). Worker threads only help on memory-rich machines
-// (each worker loads its own ONNX session, ~400 MB each). On typical dev machines
-// with <4 GB free RAM, parallel workers cause swap thrashing and are 3x slower.
-// Enable with --workers N when you have sufficient RAM (N * ~400 MB free).
+// (each worker loads its own ONNX session). On typical dev machines
+// with <4 GB free RAM, parallel workers cause swap thrashing and are slower.
+// Enable with --workers N when you have sufficient RAM.
 const DEFAULT_WORKERS = 1;
-// Batch size of 8 balances batching benefit vs padding overhead on CPU.
-// Large batches (32+) cause seqLen to pad to the max in the batch, wasting compute.
-const DEFAULT_BATCH_SIZE = 8;
-// Use quantized model by default — int8 quantization is ~4x faster on CPU
-// with negligible quality loss for retrieval tasks.
-const DEFAULT_QUANTIZED = true;
+// batch=16 is optimal for MiniLM on CPU (short sequences, low padding waste).
+// For larger models (nomic 768d), batch=1 is faster due to padding overhead.
+const DEFAULT_BATCH_SIZE = 16;
+// Quantized ONNX: faster on CPU but not all models have a quantized variant.
+// MiniLM fp32 is already fast enough; nomic benefits from quantized.
+// Falls back to fp32 automatically if quantized file is not available.
+const DEFAULT_QUANTIZED = false;
 
 // Full-precision ONNX model subpaths
 const ONNX_MODEL_PATHS: Record<string, string> = {
@@ -103,26 +106,42 @@ export class Embedder {
     this.ort = ort;
     this.runtimeLabel = label;
 
-    // Download ONNX model if not cached
-    const modelFileName = this.quantized ? "model_quantized.onnx" : "model.onnx";
+    // Download ONNX model if not cached. Tries quantized first if requested,
+    // falls back to fp32 if the quantized file is not available for this model.
+    let useQuantized = this.quantized;
+    const modelFileName = useQuantized ? "model_quantized.onnx" : "model.onnx";
     this.modelPath = join(modelDir, modelFileName);
     const modelPath = this.modelPath;
     if (!existsSync(modelPath)) {
-      const pathMap = this.quantized ? ONNX_QUANTIZED_MODEL_PATHS : ONNX_MODEL_PATHS;
-      const onnxSubpath = pathMap[this.model] ?? (this.quantized ? "onnx/model_quantized.onnx" : "onnx/model.onnx");
+      const pathMap = useQuantized ? ONNX_QUANTIZED_MODEL_PATHS : ONNX_MODEL_PATHS;
+      const onnxSubpath = pathMap[this.model] ?? (useQuantized ? "onnx/model_quantized.onnx" : "onnx/model.onnx");
       const url = `https://huggingface.co/${this.model}/resolve/main/${onnxSubpath}`;
-      process.stderr.write(`Downloading ONNX model: ${this.model} (${this.quantized ? "quantized" : "full precision"})...\n`);
-      await downloadFile(url, modelPath);
+      process.stderr.write(`Downloading ONNX model: ${this.model} (${useQuantized ? "quantized" : "fp32"})...\n`);
+      try {
+        await downloadFile(url, modelPath);
+      } catch (err: any) {
+        if (useQuantized && err?.message?.includes("404")) {
+          // Quantized not available for this model — fall back to fp32
+          process.stderr.write(`Quantized model not available, falling back to fp32\n`);
+          useQuantized = false;
+          this.modelPath = join(modelDir, "model.onnx");
+          const fp32Subpath = ONNX_MODEL_PATHS[this.model] ?? "onnx/model.onnx";
+          const fp32Url = `https://huggingface.co/${this.model}/resolve/main/${fp32Subpath}`;
+          process.stderr.write(`Downloading ONNX model: ${this.model} (fp32)...\n`);
+          await downloadFile(fp32Url, this.modelPath);
+        } else {
+          throw err;
+        }
+      }
       process.stderr.write(`Model downloaded to ${modelDir}\n`);
     }
-
     // Load tokenizer (uses HF transformers tokenizer infrastructure)
     this.tokenizer = await AutoTokenizer.from_pretrained(this.model, {
       cache_dir: CACHE_DIR,
     });
 
-    // Create ONNX inference session
-    this.session = await ort.InferenceSession.create(modelPath, {
+    // Create ONNX inference session (use this.modelPath — may have been updated by fallback)
+    this.session = await ort.InferenceSession.create(this.modelPath, {
       executionProviders: [label === "native" ? "cpu" : "wasm"],
     });
 
@@ -131,7 +150,8 @@ export class Embedder {
     this.dimensions = test.length;
     this.initialized = true;
 
-    process.stderr.write(`Embedder ready (${label} runtime, ${this.dimensions}d, batch_size=${this.batchSize}, ${this.quantized ? "quantized" : "fp32"})\n`);
+    const modelShort = this.model.split("/").pop() ?? this.model;
+    process.stderr.write(`Embedder ready (${modelShort}, ${label}, ${this.dimensions}d, batch=${this.batchSize})\n`);
   }
 
   async embed(text: string): Promise<Float32Array> {

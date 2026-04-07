@@ -216,7 +216,7 @@ program
     "  List MCP tools:    semantic-pages tools\n" +
     "  Tool details:      semantic-pages tools search_semantic"
   )
-  .version("0.4.2");
+  .version("0.4.3");
 
 program
   .command("tools [name]")
@@ -236,7 +236,7 @@ program
   .requiredOption("--notes <path>", "Path to markdown notes directory")
   .option("--reindex", "Force full reindex and exit")
   .option("--stats", "Show vault statistics and exit")
-  .option("--model <name>", "Embedding model to use", "nomic-ai/nomic-embed-text-v1.5")
+  .option("--model <name>", "Embedding model to use (default: all-MiniLM-L6-v2, fast; use nomic-ai/nomic-embed-text-v1.5 for higher quality)")
   .option("--workers <n>", "Number of worker threads for parallel embedding", parseInt)
   .option("--batch-size <n>", "Texts per ONNX forward pass (default: 8)", parseInt)
   .option("--no-quantized", "Use full-precision model instead of quantized (slower, slightly higher quality)")
