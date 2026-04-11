@@ -1,0 +1,15 @@
+{
+  "description": "semantic-pages SessionStart hook — auto-wires .claude/.vault and, when hit-em-with-the-docs is installed, adds a read-only .documentation index",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "semantic-pages",
+  "description": "Semantic search + knowledge graph MCP server for markdown vaults. Auto-wires a read/write vault at .claude/.vault, and a read-only docs index at .documentation when hit-em-with-the-docs is also installed.",
+  "version": "0.6.0",
+  "author": {
+    "name": "TheGlitchKing",
+    "email": "theglitchking@users.noreply.github.com"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/TheGlitchKing/semantic-pages",
+  "repository": "https://github.com/TheGlitchKing/semantic-pages",
+  "keywords": [
+    "mcp",
+    "semantic-search",
+    "knowledge-graph",
+    "markdown",
+    "vector-search",
+    "embeddings",
+    "wikilinks",
+    "vault"
+  ]
+}

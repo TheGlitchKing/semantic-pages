@@ -21,6 +21,7 @@ export interface ServerOptions {
   workers?: number;
   batchSize?: number;
   quantized?: boolean;
+  readOnly?: boolean;
   onProgress?: (embedded: number, total: number) => void;
 }
 
@@ -442,56 +443,58 @@ export async function createServer(notesPath: string, options: ServerOptions = {
     }
   );
 
-  // --- Write tools ---
-  server.tool(
-    "create_note",
-    "Create a new markdown note",
-    {
-      path: z.string(),
-      content: z.string(),
-      frontmatter: z.record(z.unknown()).optional(),
-    },
-    async ({ path, content, frontmatter }) => {
-      await crud.create(path, content, frontmatter);
-      return textResponse(`Created: ${path}`);
-    }
-  );
+  // --- Write tools (suppressed when readOnly) ---
+  if (!options.readOnly) {
+    server.tool(
+      "create_note",
+      "Create a new markdown note",
+      {
+        path: z.string(),
+        content: z.string(),
+        frontmatter: z.record(z.unknown()).optional(),
+      },
+      async ({ path, content, frontmatter }) => {
+        await crud.create(path, content, frontmatter);
+        return textResponse(`Created: ${path}`);
+      }
+    );
 
-  server.tool(
-    "update_note",
-    "Edit note content — overwrite, append, prepend, or patch by heading",
-    {
-      path: z.string(),
-      content: z.string(),
-      mode: z.enum(["overwrite", "append", "prepend", "patch-by-heading"]),
-      heading: z.string().optional(),
-    },
-    async ({ path, content, mode, heading }) => {
-      await crud.update(path, content, { mode, heading });
-      return textResponse(`Updated: ${path} (${mode})`);
-    }
-  );
+    server.tool(
+      "update_note",
+      "Edit note content — overwrite, append, prepend, or patch by heading",
+      {
+        path: z.string(),
+        content: z.string(),
+        mode: z.enum(["overwrite", "append", "prepend", "patch-by-heading"]),
+        heading: z.string().optional(),
+      },
+      async ({ path, content, mode, heading }) => {
+        await crud.update(path, content, { mode, heading });
+        return textResponse(`Updated: ${path} (${mode})`);
+      }
+    );
 
-  server.tool(
-    "delete_note",
-    "Delete a note permanently",
-    { path: z.string(), confirm: z.boolean().default(false) },
-    async ({ path, confirm }) => {
-      if (!confirm) return textResponse(`Set confirm=true to delete ${path}`);
-      await crud.delete(path);
-      return textResponse(`Deleted: ${path}`);
-    }
-  );
+    server.tool(
+      "delete_note",
+      "Delete a note permanently",
+      { path: z.string(), confirm: z.boolean().default(false) },
+      async ({ path, confirm }) => {
+        if (!confirm) return textResponse(`Set confirm=true to delete ${path}`);
+        await crud.delete(path);
+        return textResponse(`Deleted: ${path}`);
+      }
+    );
 
-  server.tool(
-    "move_note",
-    "Move or rename a note — updates wikilinks across the vault",
-    { from: z.string(), to: z.string() },
-    async ({ from, to }) => {
-      await crud.move(from, to);
-      return textResponse(`Moved: ${from} → ${to}`);
-    }
-  );
+    server.tool(
+      "move_note",
+      "Move or rename a note — updates wikilinks across the vault",
+      { from: z.string(), to: z.string() },
+      async ({ from, to }) => {
+        await crud.move(from, to);
+        return textResponse(`Moved: ${from} → ${to}`);
+      }
+    );
+  }
 
   // --- Metadata tools ---
   server.tool(
@@ -504,53 +507,55 @@ export async function createServer(notesPath: string, options: ServerOptions = {
     }
   );
 
-  server.tool(
-    "update_frontmatter",
-    "Set or delete YAML frontmatter keys — pass null to delete a key",
-    { path: z.string(), fields: z.record(z.unknown()) },
-    async ({ path, fields }) => {
-      await frontmatterManager.update(path, fields);
-      return textResponse(`Frontmatter updated: ${path}`);
-    }
-  );
+  if (!options.readOnly) {
+    server.tool(
+      "update_frontmatter",
+      "Set or delete YAML frontmatter keys — pass null to delete a key",
+      { path: z.string(), fields: z.record(z.unknown()) },
+      async ({ path, fields }) => {
+        await frontmatterManager.update(path, fields);
+        return textResponse(`Frontmatter updated: ${path}`);
+      }
+    );
 
-  server.tool(
-    "manage_tags",
-    "Add, remove, or list tags on a note (frontmatter and inline)",
-    {
-      path: z.string(),
-      action: z.enum(["add", "remove", "list"]),
-      tags: z.array(z.string()).optional(),
-    },
-    async ({ path, action, tags }) => {
-      switch (action) {
-        case "list": {
-          const result = await tagManager.list(path);
-          return textResponse(JSON.stringify(result));
-        }
-        case "add": {
-          if (!tags?.length) return textResponse("No tags provided");
-          await tagManager.add(path, tags);
-          return textResponse(`Added tags to ${path}: ${tags.join(", ")}`);
-        }
-        case "remove": {
-          if (!tags?.length) return textResponse("No tags provided");
-          await tagManager.remove(path, tags);
-          return textResponse(`Removed tags from ${path}: ${tags.join(", ")}`);
+    server.tool(
+      "manage_tags",
+      "Add, remove, or list tags on a note (frontmatter and inline)",
+      {
+        path: z.string(),
+        action: z.enum(["add", "remove", "list"]),
+        tags: z.array(z.string()).optional(),
+      },
+      async ({ path, action, tags }) => {
+        switch (action) {
+          case "list": {
+            const result = await tagManager.list(path);
+            return textResponse(JSON.stringify(result));
+          }
+          case "add": {
+            if (!tags?.length) return textResponse("No tags provided");
+            await tagManager.add(path, tags);
+            return textResponse(`Added tags to ${path}: ${tags.join(", ")}`);
+          }
+          case "remove": {
+            if (!tags?.length) return textResponse("No tags provided");
+            await tagManager.remove(path, tags);
+            return textResponse(`Removed tags from ${path}: ${tags.join(", ")}`);
+          }
         }
       }
-    }
-  );
+    );
 
-  server.tool(
-    "rename_tag",
-    "Rename a tag across all notes in the vault",
-    { oldTag: z.string(), newTag: z.string() },
-    async ({ oldTag, newTag }) => {
-      const count = await tagManager.renameVaultWide(oldTag, newTag);
-      return textResponse(`Renamed #${oldTag} → #${newTag} in ${count} files`);
-    }
-  );
+    server.tool(
+      "rename_tag",
+      "Rename a tag across all notes in the vault",
+      { oldTag: z.string(), newTag: z.string() },
+      async ({ oldTag, newTag }) => {
+        const count = await tagManager.renameVaultWide(oldTag, newTag);
+        return textResponse(`Renamed #${oldTag} → #${newTag} in ${count} files`);
+      }
+    );
+  }
 
   // --- Graph tools ---
   server.tool(

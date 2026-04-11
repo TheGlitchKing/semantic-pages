@@ -39,6 +39,48 @@ The index is stored in `.semantic-pages-index/` alongside your notes (gitignore 
 - **File Watcher**: Incremental re-indexing on file changes with debounce
 - **Local Embeddings**: No API key, no network after first model download
 - **Zero Dependencies Beyond Node**: No Docker, no Python, no Obsidian, no GUI
+- **Auto-Wire**: Installing the Claude Code plugin auto-creates `./.claude/.vault/` and wires it as a read/write MCP server — no manual `.mcp.json` editing required
+- **Sister Plugin Companion**: When [`hit-em-with-the-docs`](https://github.com/TheGlitchKing/hit-em-with-the-docs) is also installed, a second **read-only** MCP server is auto-wired at `./.documentation/` so you can semantically search your docs without risking accidental writes to a tree that hewtd owns
+
+---
+
+## Sister Plugin: hit-em-with-the-docs
+
+[`hit-em-with-the-docs`](https://github.com/TheGlitchKing/hit-em-with-the-docs) is the **canonical writer** of `./.documentation/`. It scaffolds, classifies, maintains, and validates docs across 15 domains with a 22-field metadata schema. Semantic Pages is the **canonical reader** — when both plugins are installed, Semantic Pages auto-wires a read-only index of `./.documentation/` so Claude can search it, traverse its wikilinks, and list/read docs without any write primitives exposed. That split keeps hewtd the sole authority for writes while giving you semantic discovery over the result.
+
+### The matrix
+
+| `semantic-pages` installed | `hit-em-with-the-docs` installed | Result |
+|---|---|---|
+| ✗ | ✗ | nothing |
+| ✗ | ✓ | hewtd CLI only; `.documentation/` managed but not indexed |
+| ✓ | ✗ | single MCP at `./.claude/.vault` (read/write, auto-created) |
+| ✓ | ✓ | `./.claude/.vault` (read/write) **+** `./.documentation` (read-only) |
+
+### How the auto-wire works
+
+Semantic Pages ships a `SessionStart` hook that runs at the start of every Claude Code session and reconciles the project's `.mcp.json`:
+
+1. Always ensures `./.claude/.vault/` exists (creates if missing)
+2. Always ensures a `semantic-vault` MCP entry pointed at `./.claude/.vault` (read/write — your personal research notes, session artifacts, scratch graph)
+3. If `hit-em-with-the-docs` is in your enabled plugins **and** `./.documentation/` exists in the current project → adds a `semantic-pages` MCP entry pointed at `./.documentation` with `--read-only` (the 7 write tools are suppressed at the MCP tool list level)
+4. If either condition stops being true → idempotently removes the `semantic-pages` entry (self-healing when you uninstall hewtd or the docs tree goes away)
+
+The hook is a no-op when the computed `.mcp.json` matches what's already on disk, so there's no git churn from repeated session starts. It only touches its own entries — any custom MCP servers you've added (playwright, custom tools, etc.) are left untouched. If you've manually defined a `semantic-pages` entry pointing at a non-`.documentation` path, the hook respects it and leaves it alone.
+
+### Why read-only for `.documentation/`
+
+`./.documentation/` is a **managed tree** — hewtd owns the lifecycle (creates files, classifies them, maintains frontmatter, prunes stale entries, checks links). If Semantic Pages also exposed `create_note`, `update_note`, `delete_note`, `move_note`, `update_frontmatter`, `manage_tags`, and `rename_tag` over that tree, you'd have two writers racing over the same schema and hewtd couldn't guarantee its invariants. Read-only gives you semantic discovery without that risk. Your personal `.claude/.vault/` stays fully read/write — hewtd doesn't touch it, so Semantic Pages is the sole writer there and all 21 tools are available.
+
+### The `--read-only` flag
+
+The auto-wire uses a new `--read-only` CLI flag (v0.6.0+) that filters out the 7 write tools from the MCP server's tool list at startup. You can use it manually anywhere:
+
+```bash
+semantic-pages --notes ./any-shared-vault --read-only
+```
+
+Only the 14 read tools are exposed (`search_*`, `read_note`, `read_multiple_notes`, `list_notes`, `backlinks`, `forwardlinks`, `graph_path`, `graph_statistics`, `get_frontmatter`, `get_stats`, `reindex`).
 
 ---
 
@@ -119,6 +161,24 @@ npm install --save-dev @theglitchking/semantic-pages
   }
 }
 ```
+
+#### Method E: Claude Code Plugin (Recommended — zero config, auto-wires)
+
+This is the easiest path if you use Claude Code and want `.claude/.vault/` + (optionally) `.documentation/` indexed automatically.
+
+```bash
+# Inside a Claude Code session:
+/plugin marketplace add TheGlitchKing/semantic-pages
+/plugin install semantic-pages@semantic-pages-marketplace
+```
+
+What happens next session:
+1. A `SessionStart` hook runs and ensures `./.claude/.vault/` exists
+2. Your project's `.mcp.json` gets a `semantic-vault` entry pointed at `./.claude/.vault` (read/write)
+3. **If** `hit-em-with-the-docs` is also installed **and** `./.documentation/` exists → a second `semantic-pages` entry is added, pointed at `./.documentation` with `--read-only`
+4. You get 21 tools (14 if the docs server is the one being used) for semantic search, graph traversal, and (for the vault) note CRUD
+
+No manual `.mcp.json` editing. Uninstalling the plugin cleanly leaves your existing entries alone on the next session.
 
 ---
 
@@ -515,7 +575,7 @@ src/
 
 **Frontmatter is optional.** Every note gets a modification timestamp regardless — resolved from frontmatter date fields if present, otherwise from the file's `fs.stat` mtime. When frontmatter fields like `status`, `tier`, `domains`, `load_priority`, or `purpose` are present, they're indexed and exposed through all search tools as filters and score boosters. Plain notes with no frontmatter work exactly as before.
 
-If you want structured frontmatter with a full schema (22 fields, 15 domains, health scoring), [**hit-em-with-the-docs**](https://github.com/TheGlitchKing/hit-em-with-the-docs) is a companion tool that manages docs for Claude Code projects — its schema is natively understood by Semantic Pages.
+If you want structured frontmatter with a full schema (22 fields, 15 domains, health scoring), [**hit-em-with-the-docs**](https://github.com/TheGlitchKing/hit-em-with-the-docs) is Semantic Pages' **sister plugin** (see [Sister Plugin: hit-em-with-the-docs](#sister-plugin-hit-em-with-the-docs) above). It manages `./.documentation/` as a writer-owned tree; Semantic Pages auto-wires a read-only index of it when both plugins are installed. All hewtd frontmatter fields are natively understood by the indexer.
 
 #### Step 2: Chunk
 ```

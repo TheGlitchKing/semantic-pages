@@ -84,7 +84,7 @@ That's all you need to get date filtering, priority boosting, and status filteri
 
 ## Full Schema Example
 
-The fields above are compatible with [**hit-em-with-the-docs**](https://github.com/TheGlitchKing/hit-em-with-the-docs) — a self-managing documentation system for Claude Code that enforces a 22-field metadata schema, auto-classifies documents into 15 domains, and generates health reports. If you're using hit-em-with-the-docs to manage your vault, all its frontmatter fields index automatically with no extra configuration.
+The fields above are compatible with [**hit-em-with-the-docs**](https://github.com/TheGlitchKing/hit-em-with-the-docs) — Semantic Pages' sister plugin. hewtd is the canonical **writer** of `./.documentation/` (enforces a 22-field schema, auto-classifies into 15 domains, generates health reports); Semantic Pages is the canonical **reader** (indexes the schema natively). When both plugins are installed in the same project, Semantic Pages auto-wires a read-only MCP server over `./.documentation/` via its `SessionStart` hook — see the [Sister Plugin section of the README](../README.md#sister-plugin-hit-em-with-the-docs) for the full auto-wiring behavior. All hewtd frontmatter fields index automatically with no extra configuration.
 
 ```yaml
 ---
