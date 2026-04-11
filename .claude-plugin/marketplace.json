@@ -1,0 +1,47 @@
+{
+  "name": "semantic-pages-marketplace",
+  "owner": {
+    "name": "TheGlitchKing",
+    "email": "theglitchking@users.noreply.github.com"
+  },
+  "metadata": {
+    "description": "Official marketplace for semantic-pages - Semantic search + knowledge graph MCP server with auto-wiring for .claude/.vault and hit-em-with-the-docs companion",
+    "version": "0.6.0"
+  },
+  "plugins": [
+    {
+      "name": "semantic-pages",
+      "description": "Semantic search + knowledge graph MCP server for markdown vaults. Auto-wires a read/write vault at .claude/.vault, and a read-only docs index at .documentation when hit-em-with-the-docs is also installed.",
+      "version": "0.6.0",
+      "author": {
+        "name": "TheGlitchKing"
+      },
+      "homepage": "https://github.com/TheGlitchKing/semantic-pages",
+      "repository": "https://github.com/TheGlitchKing/semantic-pages.git",
+      "license": "MIT",
+      "keywords": [
+        "mcp",
+        "semantic-search",
+        "knowledge-graph",
+        "markdown",
+        "vector-search",
+        "embeddings",
+        "wikilinks",
+        "vault",
+        "claude-code"
+      ],
+      "category": "search",
+      "tags": [
+        "mcp-server",
+        "semantic-search",
+        "knowledge-graph",
+        "auto-wire"
+      ],
+      "source": {
+        "source": "npm",
+        "package": "@theglitchking/semantic-pages"
+      },
+      "strict": true
+    }
+  ]
+}
