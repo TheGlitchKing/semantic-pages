@@ -1,0 +1,6 @@
+# Skill eval workspaces — test artifacts, must not ship in npm tarball.
+# These contain host-repo-specific content (transcripts, grading, vault notes
+# from the repo the skill was evaluated against) and would violate the
+# repo-agnostic guarantee of bundled skills. The corresponding .gitignore
+# rule keeps these out of git; this keeps them out of npm.
+skills/*-workspace/
