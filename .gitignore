@@ -18,3 +18,6 @@ dist/
 .claude/memory/*
 !.claude/memory/.gitkeep
 .planning/
+
+# Skill eval workspaces (test artifacts, never ship in plugin distribution)
+skills/*-workspace/

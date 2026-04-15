@@ -1,0 +1,37 @@
+{
+  "skill_name": "semantic-first",
+  "evals": [
+    {
+      "id": 1,
+      "name": "flow-a-capability-existence-user-delete",
+      "flow": "A",
+      "prompt": "Is there a user delete in this repo that deletes a user AND their data completely?",
+      "expected_output": "Ambiguous-on-purpose case: a naive read sends this to Grep for a delete symbol, but the answer (whether the capability exists and how it's designed) lives in prose in design docs. The skill should try mcp__semantic-pages__search_hybrid first and only fall through to code search if the docs don't answer it. Success = used semantic search first, cited specific note filenames, did not start with grep.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "flow-a-multi-part-infra-question",
+      "flow": "A",
+      "prompt": "What kind of git method is being used, and how many environments and domains/subdomains are there in each environment, and what are they?",
+      "expected_output": "Multi-part factual question where the answer is spread across several docs (git workflow, environments, domains all documented separately). Skill should use search_hybrid, read multiple notes, and ideally traverse via forwardlinks/backlinks to link the pieces together. Should cite each note used. No grepping source code. Success = pulled from multiple notes, composed a complete multi-part answer, cited filenames.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "flow-b-pure-external-research",
+      "flow": "B",
+      "prompt": "What's the best CRM platform for a small business team of 10?",
+      "expected_output": "Pure external research, no repo context. Skill should: (1) search the vault for prior research on CRM evaluation, (2) do web research via WebSearch/WebFetch, (3) write a new .md file to .claude/.vault/ with full frontmatter (all required fields from references/vault-frontmatter.md), (4) answer from the note with a filename pointer. Success = a file was created at .claude/.vault/<slug>.md, frontmatter has all required fields with sensible values, note body has actual research content (not a stub), chat response cites the note filename.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "name": "flow-b-mixed-composition",
+      "flow": "B",
+      "prompt": "We use HashiCorp Vault for secrets management in this repo — is there a better alternative we should consider?",
+      "expected_output": "Hardest test: requires composing Flow A (find how the repo currently uses HashiCorp Vault, cite docs) with Flow B (research alternatives via web search, write vault note). The skill should NOT pick one flow and drop the other. Success = (1) semantic-pages was searched for current usage and specific notes were cited, (2) web research was performed for alternatives, (3) a .md file was written to .claude/.vault/ with full frontmatter and source: mixed (since it combines docs-lookup and web-research), (4) final answer references both the repo's current setup and the researched alternatives with explicit confidence, (5) the vault note contains a 'what we currently do' section drawn from Flow A findings.",
+      "files": []
+    }
+  ]
+}
