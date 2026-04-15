@@ -1,6 +1,91 @@
 # Changelog
 
-## 0.4.3 — Default model switch to MiniLM (current)
+> Note: This changelog has gaps between 0.4.3 and 0.6.2 — entries for 0.5.0,
+> 0.6.0, and 0.6.1 were not written at the time of release and need to be
+> backfilled from git history. See `git log v0.4.3..v0.6.0` for context.
+
+## 0.6.3 — Documentation catch-up *(current)*
+
+Docs-only patch. No code or test changes — the package is functionally
+identical to 0.6.2.
+
+**README:**
+- Added `--wait-for-ready` to the CLI command table
+- Added a "When to use it" detail section for `--wait-for-ready` matching
+  the existing pattern for `--reindex` / `--stats` / `--no-watch`
+- Added a new "## Bundled Skills" section documenting `semantic-first` —
+  the Claude Code skill that has been shipping in the npm tarball since
+  0.6.1 but had no README mention until now. Covers what it is, the two
+  flows (docs lookup + research notes), where it lives in the package
+  (`skills/semantic-first/`), and the gating behavior with respect to the
+  `hit-em-with-the-docs` companion plugin
+
+**Changelog:**
+- Added this 0.6.3 entry
+- Added the 0.6.2 entry below
+- Flagged the 0.5.0 / 0.6.0 / 0.6.1 historical gap so it can be backfilled
+  in a future session
+
+---
+
+## 0.6.2 — Test suite repair + 3 real bug fixes
+
+Goes from "22 failing / 14 skipped / 101 passing" to **137 passing**
+(13/13 test files), and surfaces three real production bugs along the way.
+
+**Real code fixes:**
+
+- **`src/core/embedder.ts` — atomic ONNX model download.** The previous
+  `downloadFile()` opened a writeStream on the final destination path, so
+  two concurrent processes calling `Embedder.init()` raced on the same
+  file and produced a corrupt ONNX that failed Protobuf parsing on load.
+  This trivially reproduced in the test suite (multiple parallel test
+  files all trying to download to `~/.semantic-pages/models/`), but also
+  affects real users who run multiple `semantic-pages` instances on a
+  fresh install. Fixed by writing to a process-unique temp path and
+  atomically renaming onto the final path. Worst case is one wasted
+  download, never a corrupt artifact.
+- **`src/core/indexer.ts` — symlinked directories now indexed.**
+  `indexAll()` called `glob("**/*.md", { cwd })` without `follow: true`,
+  so any notes inside a symlinked subdirectory were silently invisible
+  to the indexer. This broke the documented "share notes across vaults
+  via symlink" use case. Fixed by adding `follow: true`. `glob` does
+  inode-based cycle detection, so circular symlinks are still safe.
+- **`src/mcp/server.ts` — `tryLoadCachedIndex` now reports `"ready"` when
+  the cache matches disk.** Previous behavior unconditionally set
+  `indexState = "stale"` after a successful cache load, which (a) misled
+  `get_stats` callers into thinking a perfectly usable index was unsafe,
+  and (b) made the state machine non-promotable — short of a full
+  reindex, there was no path from `stale` to `ready`. Now the function
+  does a freshness check by comparing the cached `totalChunks` against
+  the current chunk count on disk: match → `ready`; mismatch → still
+  serve cached data but mark `stale` so callers know a refresh is
+  desirable. We deliberately don't auto-reindex on stale because that
+  defeats the point of caching; the file watcher catches real changes
+  during normal operation.
+
+**New CLI feature:**
+
+- **`--wait-for-ready` flag.** Previously the only way to know an MCP
+  server had finished indexing was to poll `get_stats`. Users scripting
+  semantic-pages now have a way to block startup until the index is
+  fully built. The default behavior (background indexing) is unchanged.
+
+**Test infrastructure:**
+
+- Added vitest `globalSetup` that pre-downloads the ONNX model once
+  before any test files run. Combined with the atomic-rename fix,
+  parallel test files now share the cached model instead of all racing
+  to download. Suite duration dropped from ~132s to ~18s.
+- Updated three test files for behaviors that had drifted: `crud.test.ts`
+  (auto-stamped frontmatter on update, expected behavior since 21b84c8),
+  `stdio-server.test.ts` (default model `nomic` → `MiniLM`), and
+  `mcp-server.test.ts` + `stdio-server.test.ts` (use `waitForReady` so
+  they don't race against background indexing).
+
+---
+
+## 0.4.3 — Default model switch to MiniLM
 
 **Breaking change**: Default embedding model changed from `nomic-ai/nomic-embed-text-v1.5` to `sentence-transformers/all-MiniLM-L6-v2`.
 

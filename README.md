@@ -193,6 +193,7 @@ These commands run in your terminal and manage your notes index.
 | `semantic-pages --notes <path>` | Start MCP server (default mode) |
 | `semantic-pages --notes <path> --stats` | Show vault statistics and exit |
 | `semantic-pages --notes <path> --reindex` | Force full reindex and exit |
+| `semantic-pages --notes <path> --wait-for-ready` | Block startup until indexing finishes (default: index in background) |
 | `semantic-pages --notes <path> --no-watch` | Start server without file watcher |
 | `semantic-pages tools` | List all 21 MCP tools with descriptions |
 | `semantic-pages tools <name>` | Show arguments and examples for a specific tool |
@@ -284,6 +285,22 @@ semantic-pages --notes ./vault --reindex
 - After changing the embedding model
 
 **What to expect**: Full re-parse, re-embed, and re-index of all markdown files. Takes 30 seconds to ~20 minutes depending on vault size and hardware. See [Performance Tuning](./.documentation/performance-tuning.md) for details.
+
+---
+
+**`--wait-for-ready` - Block startup until the index is fully built** *(0.6.2+)*
+
+**How to use it**:
+```bash
+semantic-pages --notes ./vault --wait-for-ready
+```
+
+**When to use it**:
+- Scripted setups where you need to know the server is actually ready before sending tool calls
+- CI / test harnesses that should not race against background indexing
+- Anywhere you'd otherwise have to poll `get_stats` until `indexState === "ready"`
+
+**What to expect**: The default behavior is to start the server immediately and build the index in the background — search/list tools return `"Indexing in progress..."` until ready. With `--wait-for-ready`, startup blocks until the model is loaded and the index is fully built; the first tool call you make is guaranteed to hit live data. Trade-off: longer startup, no polling needed.
 
 ---
 
@@ -451,6 +468,28 @@ The deployment guide links to the microservices overview, which links to the use
 |------|-------------|
 | `get_stats` | Vault stats — total notes, chunks, embeddings, graph density, model info |
 | `reindex` | Force full reindex of the vault |
+
+---
+
+## Bundled Skills
+
+Semantic Pages ships with a Claude Code skill that auto-routes documentation lookups and research tasks through the MCP servers this plugin installs.
+
+### `semantic-first` *(0.6.1+)*
+
+A repo-agnostic skill that teaches Claude to reach for `semantic-pages` and `semantic-vault` **before** falling back to `Grep` / `Glob` / inline web research. It defines two flows that compose:
+
+- **Flow A — docs lookup.** Triggers on prose questions about the current repo ("how does this repo handle X?", "what's our deploy process?", "where's the guide for Y?"). Routes to `mcp__semantic-pages__search_hybrid`, reads the top hits via `read_note`, and answers with filename citations. Activates when the companion plugin [`hit-em-with-the-docs`](https://github.com/TheGlitchKing/hit-em-with-the-docs) is also installed (that's the plugin that owns the docs index).
+- **Flow B — research notes.** Triggers on evaluative or comparative questions ("what's the best X for Y?", "is there a better alternative to Z?", any "research/investigate/look into"). Searches `.claude/.vault` for prior research, does fresh web research if needed, and writes findings to `.claude/.vault/<slug>.md` with structured frontmatter (16 fields adapted from the hewtd 22-field schema). The vault note is the canonical artifact; the chat answer summarizes it with a filename pointer.
+
+Each flow probes its MCP server independently and degrades gracefully when one isn't available.
+
+**Where it lives in the package**: `skills/semantic-first/` (shipped in the npm tarball as of 0.6.1).
+- `SKILL.md` — main skill body
+- `references/vault-frontmatter.md` — the 16-field vault note schema with per-field rationale
+- `evals/evals.json` — the 4 test prompts the skill was iterated against during development
+
+When you install `semantic-pages` via the Claude Code plugin marketplace or via npm, Claude Code picks up this skill automatically — no extra wiring required.
 
 ---
 

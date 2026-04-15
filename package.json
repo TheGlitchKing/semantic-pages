@@ -1,6 +1,6 @@
 {
   "name": "@theglitchking/semantic-pages",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Semantic search + knowledge graph MCP server for markdown vaults. Claude Code plugin with auto-wiring for .claude/.vault and read-only .documentation companion when hit-em-with-the-docs is installed.",
   "type": "module",
   "main": "./dist/core/index.js",
