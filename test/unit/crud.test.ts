@@ -4,6 +4,7 @@ import { createTempVault, cleanupTempDir } from "../setup.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
+import matter from "gray-matter";
 
 describe("NoteCrud", () => {
   let tempDir: string;
@@ -70,10 +71,19 @@ describe("NoteCrud", () => {
   });
 
   describe("update", () => {
-    it("should overwrite content", async () => {
+    it("should overwrite content (auto-stamps frontmatter)", async () => {
+      // NoteCrud.update auto-stamps last_updated, word_count, and
+      // estimated_read_time on every update regardless of mode. See
+      // src/core/crud.ts:93-98 (computeStamps applied after the mode switch).
+      // This test asserts both that the body is replaced AND that the
+      // auto-stamps land in the resulting frontmatter.
       await crud.update("orphan.md", "Completely new content.", { mode: "overwrite" });
       const content = await readFile(join(tempDir, "orphan.md"), "utf-8");
-      expect(content).toBe("Completely new content.");
+      const parsed = matter(content);
+      expect(parsed.content.trim()).toBe("Completely new content.");
+      expect(parsed.data).toHaveProperty("last_updated");
+      expect(parsed.data).toHaveProperty("word_count", 3);
+      expect(parsed.data).toHaveProperty("estimated_read_time");
     });
 
     it("should append content", async () => {

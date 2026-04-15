@@ -52,11 +52,16 @@ export async function createServer(notesPath: string, options: ServerOptions = {
 
       // Check for model mismatch — if model changed, cached embeddings are invalid
       const metaPath = join(indexPath, "meta.json");
+      let meta: { model?: string; totalChunks?: number; dimensions?: number; indexedAt?: string } | null = null;
       if (existsSync(metaPath)) {
-        const meta = JSON.parse(await readFile(metaPath, "utf-8"));
-        if (meta.model && meta.model !== embedder.getModel()) {
-          process.stderr.write(`Model changed (${meta.model} → ${embedder.getModel()}), forcing reindex\n`);
-          return false;
+        try {
+          meta = JSON.parse(await readFile(metaPath, "utf-8"));
+          if (meta?.model && meta.model !== embedder.getModel()) {
+            process.stderr.write(`Model changed (${meta.model} → ${embedder.getModel()}), forcing reindex\n`);
+            return false;
+          }
+        } catch {
+          meta = null;
         }
       }
 
@@ -75,7 +80,23 @@ export async function createServer(notesPath: string, options: ServerOptions = {
       textSearch.setDocuments(documents);
 
       vectorIndex = tempVector;
-      indexState = "stale";
+
+      // Freshness check. The previous behavior was to always mark state as
+      // "stale" after a successful cache load, which:
+      //   (a) misled users running get_stats — they saw "stale" even when
+      //       the cache perfectly matched disk and was fully usable
+      //   (b) made the state machine non-promotable: short of a full reindex,
+      //       there was no path from "stale" to "ready"
+      // Now we compare the cached chunk count against what's actually on
+      // disk right now. If they match, the cache is consistent → "ready".
+      // If they differ (files added/removed since the cache was saved), we
+      // serve the cached data but mark state "stale" so callers know a
+      // refresh is desirable. We don't auto-reindex here because that would
+      // defeat the point of caching — the file watcher catches real changes
+      // during normal operation, and users can call reindex explicitly.
+      const currentChunks = documents.reduce((n, d) => n + d.chunks.length, 0);
+      const fresh = meta?.totalChunks !== undefined && meta.totalChunks === currentChunks;
+      indexState = fresh ? "ready" : "stale";
       return true;
     } catch {
       return false;

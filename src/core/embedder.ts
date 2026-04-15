@@ -1,5 +1,5 @@
 import { AutoTokenizer } from "@huggingface/transformers";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rename, unlink } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { existsSync, createWriteStream } from "node:fs";
 import { homedir } from "node:os";
@@ -62,12 +62,27 @@ async function resolveOnnxRuntime(): Promise<{ ort: OrtModule; label: RuntimeLab
   }
 }
 
+// Download to a process-unique temp file, then atomically rename onto the
+// final path. Two concurrent downloaders won't corrupt each other's partial
+// writes — the worst case is one wasted download (rename is last-writer-wins
+// but each rename installs a complete, valid file). Without this, multiple
+// processes calling Embedder.init() against the same cache (e.g. parallel
+// vitest workers, or multiple semantic-pages servers on a fresh install) race
+// on a single shared writeStream and produce a corrupt ONNX file that fails
+// Protobuf parsing on load.
 async function downloadFile(url: string, destPath: string): Promise<void> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Download failed (${response.status}): ${url}`);
   if (!response.body) throw new Error(`No response body: ${url}`);
-  const fileStream = createWriteStream(destPath);
-  await streamPipeline(Readable.fromWeb(response.body as never), fileStream);
+  const tempPath = `${destPath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    const fileStream = createWriteStream(tempPath);
+    await streamPipeline(Readable.fromWeb(response.body as never), fileStream);
+    await rename(tempPath, destPath);
+  } catch (err) {
+    try { await unlink(tempPath); } catch { /* temp may not exist */ }
+    throw err;
+  }
 }
 
 export class Embedder {

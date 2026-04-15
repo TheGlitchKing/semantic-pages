@@ -10,7 +10,13 @@ describe("MCP Server", () => {
 
   beforeAll(async () => {
     tempDir = await createTempVault();
-    const server = await createServer(tempDir, { watch: false });
+    // waitForReady forces blocking startup: model load + tryLoadCachedIndex +
+    // fullIndex all complete before createServer() returns. Without this the
+    // index builds in the background and tool calls race against indexState,
+    // causing search/list tools to return "Indexing in progress..." strings
+    // (not JSON) and get_stats to report totalNotes: 0. See src/mcp/server.ts
+    // line 645 for the waitForReady branch.
+    const server = await createServer(tempDir, { watch: false, waitForReady: true });
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);

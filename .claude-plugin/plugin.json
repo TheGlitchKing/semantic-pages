@@ -1,7 +1,7 @@
 {
   "name": "semantic-pages",
   "description": "Semantic search + knowledge graph MCP server for markdown vaults. Auto-wires a read/write vault at .claude/.vault, and a read-only docs index at .documentation when hit-em-with-the-docs is also installed.",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "author": {
     "name": "TheGlitchKing",
     "email": "theglitchking@users.noreply.github.com"

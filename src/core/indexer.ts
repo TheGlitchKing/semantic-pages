@@ -19,7 +19,12 @@ export class Indexer {
   }
 
   async indexAll(): Promise<IndexedDocument[]> {
-    const files = await glob("**/*.md", { cwd: this.notesPath });
+    // follow: true descends into symlinked directories. Without this, users
+    // who symlink an external folder into their vault (a common pattern for
+    // sharing notes across projects) get silently empty indexing for the
+    // symlinked content. glob does cycle detection via visited inodes so
+    // circular symlinks are handled safely.
+    const files = await glob("**/*.md", { cwd: this.notesPath, follow: true });
     const docs = await Promise.all(
       files.map((file) => this.indexFile(join(this.notesPath, file), file))
     );

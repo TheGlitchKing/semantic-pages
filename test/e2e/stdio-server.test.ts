@@ -20,7 +20,10 @@ describe("E2E: stdio MCP server", () => {
 
     transport = new StdioClientTransport({
       command: "node",
-      args: [CLI_PATH, "--notes", tempDir, "--no-watch"],
+      // --wait-for-ready blocks startup until indexing finishes, so search/list
+      // tools don't return "Indexing in progress" strings (which the tests
+      // would then try to JSON.parse and fail on).
+      args: [CLI_PATH, "--notes", tempDir, "--no-watch", "--wait-for-ready"],
     });
 
     client = new Client({ name: "e2e-test-client", version: "1.0.0" });
@@ -219,7 +222,10 @@ describe("E2E: stdio MCP server", () => {
     expect(stats.totalChunks).toBeGreaterThan(0);
     expect(stats.totalEmbeddings).toBeGreaterThan(0);
     expect(stats.embeddingDimensions).toBeGreaterThan(0);
-    expect(stats.embeddingModel).toContain("nomic");
+    // The default embedding model is sentence-transformers/all-MiniLM-L6-v2
+    // (384 dimensions). Older versions used a nomic model — that's been
+    // replaced. See src/core/embedder.ts for the current default.
+    expect(stats.embeddingModel).toContain("MiniLM");
   });
 
   it("should move a note and update wikilinks", async () => {
