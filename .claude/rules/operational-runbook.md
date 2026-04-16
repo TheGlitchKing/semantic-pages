@@ -24,7 +24,24 @@ _No known issues documented yet. When you encounter a non-obvious problem and it
 
 ## Deploy Procedures
 
-<!-- TODO: Document how to deploy to each environment -->
+### npm publish checklist
+
+Before running `npm publish` (or bumping the version):
+
+1. **Sync the CLI version string** — `src/cli/index.ts` has a `.version(...)` call in the
+   `program` definition. It must match `package.json`. It currently reads dynamically from
+   `package.json` via `createRequire`, so this is automatic — but if that line ever gets
+   reverted to a hardcoded string, `semantic-pages --version` will lie.
+   **Verify:** `node dist/cli/index.js --version` should print the version from `package.json`.
+
+2. **Build before publish** — `prepublishOnly` runs `npm run build` automatically, but confirm
+   the build is clean before tagging.
+
+3. **Clear npx cache after publish** — consumers using `npx ... @latest` may be served a stale
+   cached version. After publishing, clear the cache on affected machines:
+   ```bash
+   rm -rf ~/.npm/_npx/*/node_modules/@theglitchking
+   ```
 
 ## Key Commands
 

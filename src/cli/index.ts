@@ -3,6 +3,9 @@
 import { program } from "commander";
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+
+const { version } = createRequire(import.meta.url)("../../package.json") as { version: string };
 
 const TOOL_HELP: Record<string, { description: string; args: string; examples: string[] }> = {
   // Search
@@ -216,7 +219,7 @@ program
     "  List MCP tools:    semantic-pages tools\n" +
     "  Tool details:      semantic-pages tools search_semantic"
   )
-  .version("0.4.3");
+  .version(version);
 
 program
   .command("tools [name]")
