@@ -696,5 +696,33 @@ export async function createServer(notesPath: string, options: ServerOptions = {
 export async function startServer(notesPath: string, options: ServerOptions = {}) {
   const server = await createServer(notesPath, options);
   const transport = new StdioServerTransport();
+
+  // Exit when the parent process closes its end of the stdio pipe.
+  //
+  // This covers every "parent death" scenario: SIGKILL to Claude Code, OOM-kill,
+  // session end, terminal close, remote-MCP network drop. When the parent dies
+  // its end of the pipe is closed by the kernel, and the child receives EOF on
+  // process.stdin (emits 'end' then 'close').
+  //
+  // Without these handlers the chokidar FSWatcher (inotify fd) and the ONNX
+  // InferenceSession native thread-pool keep the Node.js event loop alive
+  // indefinitely — producing one orphan process (~180–200 MB RSS each) per Claude
+  // session. On low-memory boxes this accumulates until RAM + swap are exhausted
+  // and the host freezes.
+  //
+  // StdioServerTransport (MCP SDK v1.29.0) only listens for 'data' and 'error'
+  // on stdin; it does not call process.exit() on EOF. The McpServer class also
+  // does not exit the process on transport close — both are correct library
+  // behaviour. It is the application's responsibility to exit, and this is it.
+  process.stdin.once("end", () => process.exit(0));
+  process.stdin.once("close", () => process.exit(0));
+
+  // Honor explicit termination signals sent by process managers or the kernel.
+  // SIGTERM: sent by systemd, launchd, Docker, or `kill <pid>`.
+  // SIGHUP:  sent when the controlling terminal closes (e.g. SSH disconnect).
+  // SIGINT (Ctrl-C) is already handled by Node.js default behaviour.
+  process.once("SIGTERM", () => process.exit(0));
+  process.once("SIGHUP", () => process.exit(0));
+
   await server.connect(transport);
 }
