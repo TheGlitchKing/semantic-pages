@@ -88,83 +88,9 @@ Only the 14 read tools are exposed (`search_*`, `read_note`, `read_multiple_note
 
 ### 1. Installation Methods
 
-#### Method A: NPX (No installation needed)
+#### Method A: Claude Code Plugin (Recommended — zero config, auto-wires)
 
-This lets you run the server without installing it permanently.
-
-**Step 1**: Open your terminal in your project folder
-
-**Step 2**: Run:
-```bash
-npx semantic-pages --notes ./vault --stats
-```
-
-**Step 3**: The first time you run it, NPX downloads the package and the embedding model (~80MB). This takes 1-2 minutes.
-
-**Step 4**: After that, it runs instantly.
-
-**Use this method when**: You want to try it out, or you're adding it to a project's `.mcp.json` config.
-
-#### Method B: Global Installation (Recommended for regular use)
-
-This installs the tool on your computer so you can use it in any project.
-
-**Step 1**: Open your terminal
-
-**Step 2**: Type this command and press Enter:
-```bash
-npm install -g @theglitchking/semantic-pages
-```
-
-**Step 3**: Test that it worked:
-```bash
-semantic-pages --version
-```
-
-**Step 4**: You should see a version number. If you do, it's installed correctly!
-
-#### Method C: MCP Configuration (Recommended for Claude Code)
-
-Add to your project's `.mcp.json` so Claude has automatic access:
-
-```json
-{
-  "semantic-pages": {
-    "command": "npx",
-    "args": ["-y", "semantic-pages", "--notes", "./vault"]
-  }
-}
-```
-
-Point `--notes` at any folder of `.md` files: `./vault`, `./docs`, `./notes`, or `.` for the whole repo.
-
-**What to expect**: Next time you run `claude` in that project, Claude will have 21 new tools for searching, reading, writing, and traversing your notes.
-
-#### Method D: Project Installation (For team projects)
-
-This installs the tool only for one specific project.
-
-**Step 1**: Open your terminal in your project folder
-
-**Step 2**: Type this command:
-```bash
-npm install --save-dev @theglitchking/semantic-pages
-```
-
-**Step 3**: Add a script to your `package.json` file:
-```json
-{
-  "scripts": {
-    "notes": "semantic-pages --notes ./vault",
-    "notes:stats": "semantic-pages --notes ./vault --stats",
-    "notes:reindex": "semantic-pages --notes ./vault --reindex"
-  }
-}
-```
-
-#### Method E: Claude Code Plugin (Recommended — zero config, auto-wires)
-
-This is the easiest path if you use Claude Code and want `.claude/.vault/` + (optionally) `.documentation/` indexed automatically.
+The easiest path if you use Claude Code. Install once per project; the plugin handles `.mcp.json` wiring automatically.
 
 ```bash
 # Inside a Claude Code session:
@@ -179,6 +105,68 @@ What happens next session:
 4. You get 21 tools (14 if the docs server is the one being used) for semantic search, graph traversal, and (for the vault) note CRUD
 
 No manual `.mcp.json` editing. Uninstalling the plugin cleanly leaves your existing entries alone on the next session.
+
+#### Method B: Project Installation (Recommended for teams and AI-assisted projects)
+
+Install per-project so the version is pinned in `package.json`, stays in sync across teammates and CI, and is visible to any LLM reading the repo.
+
+```bash
+npm install --save-dev @theglitchking/semantic-pages
+```
+
+Add to your project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "semantic-vault": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["--no", "@theglitchking/semantic-pages", "--notes", "./.claude/.vault"]
+    }
+  }
+}
+```
+
+> **Why project-level over global?** A global install is invisible to collaborators, CI, and LLMs reading the repo. A project-level install pins the exact version in `package.json`, so every agent and developer working in the repo sees the same binary. Use `npx --no` (not `npx -y`) so npx uses the locally-installed version instead of fetching from the registry.
+
+#### Method C: MCP Configuration via NPX (Quick setup, no install)
+
+Add directly to your project's `.mcp.json`. npx downloads and caches the package on first use.
+
+```json
+{
+  "mcpServers": {
+    "semantic-vault": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@theglitchking/semantic-pages", "--notes", "./.claude/.vault"]
+    }
+  }
+}
+```
+
+Point `--notes` at any folder of `.md` files: `./vault`, `./docs`, `./notes`, or `.` for the whole repo.
+
+**What to expect**: Next time you run `claude` in that project, Claude will have 21 new tools for searching, reading, writing, and traversing your notes.
+
+> **Note on `@latest` and npx caching**: If you use `@latest` in the args, npx may serve a stale cached version after a new release. To force a refresh: `rm -rf ~/.npm/_npx/*/node_modules/@theglitchking`. Project-level installation (Method B) avoids this entirely.
+
+#### Method D: Try it with NPX (No installation needed)
+
+```bash
+npx @theglitchking/semantic-pages --notes ./vault --stats
+```
+
+The first run downloads the package and the embedding model (~80 MB) and takes 1–2 minutes. After that it runs instantly from cache. Use this to evaluate before committing to a project install.
+
+#### Method E: Global Installation (Not recommended)
+
+```bash
+npm install -g @theglitchking/semantic-pages
+```
+
+Avoid this for projects — a global install is invisible to collaborators, CI, and LLMs reading the repo, and will silently fall out of sync with the version everyone else is using. Use project-level installation (Method B) instead.
 
 ---
 
