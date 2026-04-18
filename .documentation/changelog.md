@@ -4,7 +4,110 @@
 > 0.6.0, and 0.6.1 were not written at the time of release and need to be
 > backfilled from git history. See `git log v0.4.3..v0.6.0` for context.
 
-## 0.6.3 — Documentation catch-up *(current)*
+## 0.9.0 — Extract shared runtime *(current)*
+
+No behavior change from 0.8.0 — a pure refactor that moves the generic
+plugin-lifecycle code to a shared package so other Glitch Kingdom plugins
+can adopt the same pattern.
+
+**Adopted `@theglitchking/claude-plugin-runtime@^0.1.0`:**
+- `scripts/link-skills.js` shrunk from 180 lines → 20 — now a thin
+  `runPostinstall(...)` call.
+- `hooks/session-start.js` shrunk from 220 lines → 13. The plugin-specific
+  `.mcp.json` reconciliation moved to `hooks/reconcile.js` and is passed
+  to the runtime as the `reconcile` option.
+- CLI `update` / `policy` / `status` / `relink` subcommands shrunk from
+  ~120 lines → 6 — now a single `registerUpdateCommands(program, ...)`
+  call.
+
+Validated against the full 10-test smoke matrix (fresh install,
+idempotent re-install, plugin-enabled dedup, skip envs, dev-in-place
+no-self-link, session-start with each policy).
+
+Reference implementation of the runtime. See
+[claude-plugin-runtime's `PLUGIN_AUTHORING_SCAFFOLD.md`](https://github.com/TheGlitchKing/claude-plugin-runtime/blob/main/docs/PLUGIN_AUTHORING_SCAFFOLD.md)
+for the authoring recipe.
+
+---
+
+## 0.8.0 — SessionStart update policy + skill auto-link
+
+Defaults are conservative (nudge-only), so existing installs behave the
+same until the user opts in.
+
+**Postinstall:**
+- Symlinks every directory under the package's `skills/` into
+  `<project>/.claude/skills/` so Claude Code can discover bundled skills
+  (it does not scan `node_modules/`). The link is relative and refreshed
+  on every install. Non-symlinks at the destination are preserved with a
+  warning. Dev-in-place (`INIT_CWD` equals the package root) is a no-op.
+- Writes `<project>/.claude/semantic-pages.json` with
+  `{ "updatePolicy": "nudge" }` if one doesn't exist yet.
+- Registers a SessionStart hook in `<project>/.claude/settings.json`
+  **only if** settings.json already exists, the marketplace plugin isn't
+  already enabled globally, and no matching hook is already registered.
+
+**SessionStart hook (`hooks/session-start.js`, Node, replaces the bash
+version):**
+- Reconciles `.mcp.json` (same wiring as before — `semantic-vault` plus
+  conditional `semantic-pages` read-only docs entry).
+- Checks npm for a newer version and acts per policy:
+  - `nudge` (default) — prints a one-liner via `additionalContext`.
+  - `auto` — runs `npm update`, re-links skills, prints an upgrade
+    confirmation.
+  - `off` — silent, no network call.
+- 3s network budget, 6h cache, CI-skip, fail-open on any error.
+- Dedup: when invoked as the marketplace plugin (`CLAUDE_PLUGIN_ROOT`
+  set) and the project has its own SessionStart entry containing
+  `semantic-pages`, the plugin instance defers.
+
+**New slash + CLI commands:**
+- `/semantic-pages:update` / `semantic-pages update`
+- `/semantic-pages:policy [auto|nudge|off]` / `semantic-pages policy`
+- `/semantic-pages:status` / `semantic-pages status`
+- `/semantic-pages:relink` / `semantic-pages relink`
+
+**Env opt-outs:**
+- `SEMANTIC_PAGES_UPDATE_POLICY` — one-shot policy override.
+- `SEMANTIC_PAGES_SKIP_LINK=1` — skip skill symlinking in postinstall.
+- `SEMANTIC_PAGES_SKIP_HOOK_REGISTER=1` — skip settings.json hook
+  registration.
+
+**README:**
+- New "Update Policy & Session-Start Hook" section covering policies,
+  config path, env overrides, dedup, and uninstall procedure.
+- Install methods reordered: Method B (project-level npm) promoted to
+  "recommended for teams and AI-assisted projects"; Method E (global
+  install) flagged as not recommended.
+
+**Runbook:**
+- Added the npm publish checklist to
+  `.claude/rules/operational-runbook.md` — CLI version sync via
+  `createRequire`, build cleanliness, npx cache flush.
+
+---
+
+## 0.6.4 — Lifecycle fix
+
+**Fixed orphan-process accumulation.** In some MCP stdio configurations
+the server wouldn't exit when the client closed the connection, leaving
+chokidar's `FSWatcher` (inotify fds) and ONNX's native thread pool
+keeping the event loop alive. On a low-memory host this accumulated to
+63 processes and exhausted RAM+swap.
+
+- Added stdin EOF + SIGTERM/SIGHUP handlers in `startServer()` that
+  `process.exit(0)` on client disconnect.
+- New e2e test suite `test/e2e/stdin-eof.test.ts` covers both stdin
+  close and SIGTERM paths.
+- Small diff, no public surface change.
+
+**Also in this release:** fixed the CLI `--version` flag to read from
+`package.json` dynamically via `createRequire(import.meta.url)` so it
+never lies about the installed version.
+
+---
+
+## 0.6.3 — Documentation catch-up
 
 Docs-only patch. No code or test changes — the package is functionally
 identical to 0.6.2.
