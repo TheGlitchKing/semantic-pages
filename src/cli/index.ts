@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { program } from "commander";
-import { resolve, join } from "node:path";
-import { existsSync } from "node:fs";
+import { resolve, join, dirname, relative } from "node:path";
+import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { registerUpdateCommands } from "@theglitchking/claude-plugin-runtime";
@@ -24,6 +24,60 @@ function runRelink(cwd: string) {
     env: { ...process.env, INIT_CWD: cwd },
     stdio: "inherit",
   });
+}
+
+function findLocalBin(cwd: string): string | null {
+  const p = join(cwd, "node_modules", "@theglitchking", "semantic-pages", "bin", "semantic-pages");
+  return existsSync(p) ? p : null;
+}
+
+function localBinArg(cwd: string): string | null {
+  const abs = findLocalBin(cwd);
+  if (!abs) return null;
+  const rel = relative(cwd, abs);
+  return rel.startsWith("..") ? abs : `./${rel}`;
+}
+
+function readJsonSafe(path: string): any {
+  try {
+    const raw = readFileSync(path, "utf8");
+    return raw.trim() ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns the fragile npx-form pattern we used to write in pre-0.10.0
+ * SessionStart hooks, so normalize-config can detect and rewrite it.
+ */
+function isNpxForm(entry: any): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  const cmd = entry.command;
+  const args = Array.isArray(entry.args) ? entry.args : [];
+  return cmd === "npx" && args.some((a: unknown) => typeof a === "string" && a.includes(PKG_NAME));
+}
+
+function isLocalForm(entry: any): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  const cmd = entry.command;
+  const args = Array.isArray(entry.args) ? entry.args : [];
+  return (
+    cmd === "node" &&
+    args.some((a: unknown) => typeof a === "string" && a.includes("node_modules/@theglitchking/semantic-pages"))
+  );
+}
+
+function extractNotesPath(entry: any): string | null {
+  const args = Array.isArray(entry?.args) ? entry.args : [];
+  const i = args.indexOf("--notes");
+  if (i === -1 || i + 1 >= args.length) return null;
+  return String(args[i + 1]);
+}
+
+function extractExtraFlags(entry: any): string[] {
+  const args = Array.isArray(entry?.args) ? entry.args : [];
+  return args.filter((a: unknown): a is string => typeof a === "string" && a.startsWith("--") && a !== "--notes");
 }
 
 const TOOL_HELP: Record<string, { description: string; args: string; examples: string[] }> = {
@@ -321,5 +375,140 @@ registerUpdateCommands(program, {
   configFile: "semantic-pages.json",
   onAfterUpdate: (cwd) => runRelink(cwd),
 });
+
+program
+  .command("normalize-config")
+  .description(
+    "Rewrite fragile `npx @latest` entries in .mcp.json to the stable node-against-node_modules form (with backup and validation)",
+  )
+  .option("--dry-run", "print the proposed changes but don't write")
+  .action((opts: { dryRun?: boolean }) => {
+    const cwd = process.cwd();
+    const mcpPath = join(cwd, ".mcp.json");
+    if (!existsSync(mcpPath)) {
+      console.log("no .mcp.json in current directory — nothing to do");
+      process.exit(0);
+    }
+    const data = readJsonSafe(mcpPath);
+    if (!data || typeof data !== "object" || !data.mcpServers || typeof data.mcpServers !== "object") {
+      console.error(`could not parse ${mcpPath}`);
+      process.exit(1);
+    }
+    const bin = localBinArg(cwd);
+    if (!bin) {
+      console.error(
+        `no local install found at ./node_modules/@theglitchking/semantic-pages/bin/semantic-pages.\n` +
+          `run 'npm install --save @theglitchking/semantic-pages' first, then re-run this command.`,
+      );
+      process.exit(1);
+    }
+    const rewritten: string[] = [];
+    for (const [key, entry] of Object.entries<any>(data.mcpServers)) {
+      if (!isNpxForm(entry)) continue;
+      const notes = extractNotesPath(entry) ?? "./.claude/.vault";
+      const extra = extractExtraFlags(entry);
+      data.mcpServers[key] = {
+        type: "stdio",
+        command: "node",
+        args: [bin, "--notes", notes, ...extra],
+      };
+      rewritten.push(key);
+    }
+    if (rewritten.length === 0) {
+      console.log("no npx-form entries found — .mcp.json is already in the stable form.");
+      process.exit(0);
+    }
+    console.log(`Rewriting ${rewritten.length} entr${rewritten.length === 1 ? "y" : "ies"}: ${rewritten.join(", ")}`);
+    if (opts.dryRun) {
+      console.log("--- proposed .mcp.json:");
+      console.log(JSON.stringify(data, null, 2));
+      console.log("--- (dry-run; no changes written)");
+      process.exit(0);
+    }
+    // Back up
+    const bakPath = join(dirname(mcpPath), ".mcp.json.bak");
+    try {
+      writeFileSync(bakPath, readFileSync(mcpPath, "utf8"));
+      console.log(`backup written: ${bakPath}`);
+    } catch (err: any) {
+      console.error(`could not write backup: ${err.message}`);
+      process.exit(1);
+    }
+    writeFileSync(mcpPath, JSON.stringify(data, null, 2) + "\n");
+
+    // Verify the local bin starts cleanly. We just run --version — fast and
+    // enough to catch ERR_MODULE_NOT_FOUND type failures.
+    const verify = spawnSync("node", [bin, "--version"], { cwd, stdio: "pipe", timeout: 15_000 });
+    if (verify.status !== 0) {
+      console.error(`verification failed (exit ${verify.status}):\n${verify.stderr?.toString() || ""}`);
+      console.error(`rolling back from ${bakPath}`);
+      writeFileSync(mcpPath, readFileSync(bakPath, "utf8"));
+      process.exit(1);
+    }
+    console.log(`✓ .mcp.json normalized and verified. Toggle the MCPs in /mcp to reconnect.`);
+    process.exit(0);
+  });
+
+program
+  .command("healthcheck")
+  .description(
+    "Verify the local install starts cleanly; self-heal common npx-cache corruption (ERR_MODULE_NOT_FOUND)",
+  )
+  .action(() => {
+    const cwd = process.cwd();
+    const bin = findLocalBin(cwd);
+    if (!bin) {
+      console.error(`no local install at ./node_modules/@theglitchking/semantic-pages/bin/semantic-pages`);
+      console.error(`run 'npm install --save @theglitchking/semantic-pages' to install.`);
+      process.exit(1);
+    }
+
+    // 1. Warn if .mcp.json uses the fragile form.
+    const mcpPath = join(cwd, ".mcp.json");
+    if (existsSync(mcpPath)) {
+      const data = readJsonSafe(mcpPath);
+      const entries = data?.mcpServers && typeof data.mcpServers === "object" ? Object.entries<any>(data.mcpServers) : [];
+      const fragile = entries.filter(([, e]) => isNpxForm(e)).map(([k]) => k);
+      if (fragile.length > 0) {
+        console.warn(
+          `⚠️  .mcp.json uses the fragile npx-@latest form for: ${fragile.join(", ")}`,
+        );
+        console.warn(`   Rewrite to the stable form:`);
+        console.warn(`     npx --no @theglitchking/semantic-pages normalize-config`);
+      }
+    }
+
+    // 2. Smoke-test the local bin.
+    const r = spawnSync("node", [bin, "--version"], { cwd, stdio: "pipe", timeout: 15_000 });
+    if (r.status === 0) {
+      console.log(`✓ local install starts cleanly (v${r.stdout?.toString().trim()})`);
+      process.exit(0);
+    }
+
+    const stderr = r.stderr?.toString() ?? "";
+
+    // 3. Self-heal ERR_MODULE_NOT_FOUND in npx cache (rare but the classic
+    //    failure mode that triggered 0.10.0). Extract the offending npx cache
+    //    dir from the error message, rm -rf it, retry once.
+    if (stderr.includes("ERR_MODULE_NOT_FOUND")) {
+      const match = stderr.match(/([\/~][^'"\s]*\/_npx\/[^\/'"\s]+)/);
+      if (match) {
+        const bad = match[1];
+        console.warn(`detected broken npx cache at ${bad} — clearing and retrying...`);
+        try { rmSync(bad, { recursive: true, force: true }); } catch {}
+        const r2 = spawnSync("node", [bin, "--version"], { cwd, stdio: "pipe", timeout: 15_000 });
+        if (r2.status === 0) {
+          console.log(`✓ cleared npx cache and verified (v${r2.stdout?.toString().trim()})`);
+          process.exit(0);
+        }
+        console.error(`retry still failed:\n${r2.stderr?.toString() || ""}`);
+      } else {
+        console.error(`ERR_MODULE_NOT_FOUND but could not locate offending cache path in the error.`);
+      }
+    }
+
+    console.error(stderr || `local install failed (exit ${r.status})`);
+    process.exit(1);
+  });
 
 program.parse();

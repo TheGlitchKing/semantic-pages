@@ -4,7 +4,79 @@
 > 0.6.0, and 0.6.1 were not written at the time of release and need to be
 > backfilled from git history. See `git log v0.4.3..v0.6.0` for context.
 
-## 0.9.0 — Extract shared runtime *(current)*
+## 0.10.0 — Fix fragile `.mcp.json` rewrite + add self-heal tools *(current)*
+
+**Bugfix (critical).** The SessionStart hook shipped in 0.8.0 was
+overwriting existing `.mcp.json` entries with the fragile
+`npx -y @theglitchking/semantic-pages@latest` form. When the npx cache
+got partially corrupted (e.g. `ERR_MODULE_NOT_FOUND` on a transitive
+dep like `vfile-message`), the MCP servers failed to start — and the
+hook had already clobbered the user's previous, working entry.
+
+**What changed in the reconcile step:**
+- Never overwrites an existing `.mcp.json` entry (vault or docs) —
+  regardless of its shape. User control always wins.
+- When creating a fresh entry (no prior entry exists), uses the stable
+  node-against-node_modules form:
+  ```json
+  { "command": "node",
+    "args": ["./node_modules/@theglitchking/semantic-pages/bin/semantic-pages",
+             "--notes", "./.claude/.vault"] }
+  ```
+  This makes `npm update` "just work" without any config rewriting —
+  node naturally picks up whatever's in node_modules at runtime.
+- Never writes the `npx @latest` form. That shape has been retired.
+- Before writing, `.mcp.json` is backed up to `.mcp.json.bak`.
+- Removal of the conditional docs entry only happens if the existing
+  entry matches a shape we recognize as ours (legacy npx form or new
+  node form pointing at `.documentation`). Anything else is preserved.
+
+**New commands for users who already have a corrupted config:**
+
+- `/semantic-pages:normalize-config` *(and CLI `npx --no ... normalize-config`)*
+  — rewrites fragile npx-form entries in `.mcp.json` to the stable form.
+  Backs up to `.mcp.json.bak`, writes new content, runs
+  `node <bin> --version` to verify the local install starts cleanly,
+  and rolls back from the backup on any failure. Supports `--dry-run`
+  to preview changes without writing.
+
+- `/semantic-pages:healthcheck` *(and CLI `npx --no ... healthcheck`)*
+  — runs `node <bin> --version` against the local install to verify it
+  starts. If it fails with `ERR_MODULE_NOT_FOUND`, extracts the
+  offending npx cache path from the error, deletes it, and retries
+  once. Also warns if `.mcp.json` still uses the fragile form.
+
+### Remediation for affected users
+
+If you installed 0.8.0 or 0.9.0 and hit `ERR_MODULE_NOT_FOUND` errors
+on MCP server startup:
+
+```bash
+# 1. Get the fix
+npm update @theglitchking/semantic-pages
+
+# 2. Rewrite any legacy npx-form entries to the stable form (creates .mcp.json.bak)
+npx --no @theglitchking/semantic-pages normalize-config
+
+# 3. Clear the broken npx cache (path comes from the original error message;
+#    if you didn't keep the error, the healthcheck subcommand will find it):
+npx --no @theglitchking/semantic-pages healthcheck
+# — or manually:
+rm -rf ~/.npm/_npx/<hash>/
+
+# 4. Reconnect: in Claude Code, toggle the semantic-vault / semantic-pages
+#    entries in /mcp (or restart the session).
+```
+
+### Also in this release
+- CLI: `--version` prints `0.10.0`.
+- `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`
+  both bumped to 0.10.0 so the plugin-marketplace cache pulls a fresh
+  tarball when users run `/plugin marketplace update`.
+
+---
+
+## 0.9.0 — Extract shared runtime
 
 No behavior change from 0.8.0 — a pure refactor that moves the generic
 plugin-lifecycle code to a shared package so other Glitch Kingdom plugins
