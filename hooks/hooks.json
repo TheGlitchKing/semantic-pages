@@ -1,12 +1,12 @@
 {
-  "description": "semantic-pages SessionStart hook — auto-wires .claude/.vault and, when hit-em-with-the-docs is installed, adds a read-only .documentation index",
+  "description": "semantic-pages SessionStart hook — reconciles .mcp.json wiring and nudges/auto-updates per policy.",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.js\""
           }
         ]
       }

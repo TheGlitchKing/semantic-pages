@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "Official marketplace for semantic-pages - Semantic search + knowledge graph MCP server with auto-wiring for .claude/.vault and hit-em-with-the-docs companion",
-    "version": "0.6.3"
+    "version": "0.9.0"
   },
   "plugins": [
     {
       "name": "semantic-pages",
       "description": "Semantic search + knowledge graph MCP server for markdown vaults. Auto-wires a read/write vault at .claude/.vault, and a read-only docs index at .documentation when hit-em-with-the-docs is also installed.",
-      "version": "0.6.3",
+      "version": "0.9.0",
       "author": {
         "name": "TheGlitchKing"
       },

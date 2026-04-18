@@ -22,3 +22,7 @@ dist/
 
 # Skill eval workspaces (test artifacts, never ship in plugin distribution)
 skills/*-workspace/
+
+# Local build / test artifacts
+*.tgz
+.claude/.semantic-pages-update-cache.json

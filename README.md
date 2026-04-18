@@ -479,6 +479,113 @@ Each flow probes its MCP server independently and degrades gracefully when one i
 
 When you install `semantic-pages` via the Claude Code plugin marketplace or via npm, Claude Code picks up this skill automatically — no extra wiring required.
 
+### How auto-linking works *(0.7.0+)*
+
+When installed as an npm dependency, a `postinstall` script symlinks every directory under the package's `skills/` into your project's `.claude/skills/` (creating that directory if missing). Claude Code only scans `<project>/.claude/skills/` and `~/.claude/skills/` — it does not look inside `node_modules/` — so this link is what makes bundled skills discoverable.
+
+- The link is relative, pointing into `node_modules/@theglitchking/semantic-pages/skills/<name>`, and is refreshed on every install/update.
+- If a regular file or directory already exists at the destination (i.e. someone copied a skill manually), the script leaves it alone and prints a warning.
+- The script is a no-op when you're developing the plugin itself (`INIT_CWD` equals the package root), so the plugin never self-links into its own repo.
+- The linker never hard-fails an install — permission errors and odd filesystems downgrade to a warning.
+
+Add the linked skills to `.gitignore` so they don't get committed in consuming projects:
+
+```
+/.claude/skills/semantic-first/
+```
+
+**Opt-out**: set `SEMANTIC_PAGES_SKIP_LINK=1` to skip linking during install — useful if you want to manage `.claude/skills/` manually.
+
+```bash
+SEMANTIC_PAGES_SKIP_LINK=1 npm install @theglitchking/semantic-pages
+```
+
+---
+
+## Update Policy & Session-Start Hook *(0.8.0+)*
+
+When you install `semantic-pages` as an npm dependency, the postinstall step also:
+
+1. Writes `<project>/.claude/semantic-pages.json` with `{ "updatePolicy": "nudge" }` if one doesn't exist.
+2. Registers a `SessionStart` hook in `<project>/.claude/settings.json` — but **only** if `settings.json` exists and neither the Claude Code plugin nor an existing semantic-pages hook is already handling it.
+
+### What the hook does
+
+At the start of every Claude Code session, the hook:
+
+- Reconciles `.mcp.json` (the same `semantic-vault` + conditional `.documentation` wiring you'd get from the plugin).
+- Checks npm for a newer version of `@theglitchking/semantic-pages` (~3s budget, results cached for 6h, skipped in CI).
+- Acts on the result according to your policy.
+
+### Policies
+
+| Policy | Behavior |
+|--------|----------|
+| `nudge` *(default)* | Print a one-liner when a newer version is available. No changes. |
+| `auto`  | Run `npm update @theglitchking/semantic-pages`, re-link skills, print `⬆️ vX → vY`. |
+| `off`   | Silent — no update check. |
+
+### Setting the policy
+
+Preferred:
+
+```
+/semantic-pages:policy auto
+/semantic-pages:policy nudge
+/semantic-pages:policy off
+```
+
+Or from the terminal:
+
+```bash
+npx --no @theglitchking/semantic-pages policy auto
+```
+
+Resolution order:
+
+1. `SEMANTIC_PAGES_UPDATE_POLICY` env var (one-shot override).
+2. `<project>/.claude/semantic-pages.json` → `updatePolicy`.
+3. Default: `nudge`.
+
+### Plugin-command menu
+
+With `semantic-pages` installed (plugin or npm), you get these slash commands:
+
+| Command | Does |
+|---------|------|
+| `/semantic-pages:update`   | Runs `npm update`, re-links skills, reports before/after. |
+| `/semantic-pages:policy [auto\|nudge\|off]` | Get or set the update policy. |
+| `/semantic-pages:status`   | Installed version, latest on npm, policy, hook state. |
+| `/semantic-pages:relink`   | Re-symlink bundled skills into `.claude/skills/`. |
+
+Each has a CLI equivalent: `npx --no @theglitchking/semantic-pages <subcommand>`.
+
+### Dedup between plugin and npm installs
+
+If you install via **both** the Claude Code plugin and the npm dep, the postinstall detects the plugin in `~/.claude/settings.json` → `enabledPlugins` and skips the settings.json hook registration. One hook fires per session, not two. If you later uninstall the plugin, the next `npm install` re-registers the project-level hook.
+
+### Opt-out
+
+```bash
+# Skip settings.json hook registration:
+SEMANTIC_PAGES_SKIP_HOOK_REGISTER=1 npm install @theglitchking/semantic-pages
+
+# Skip skill symlinking:
+SEMANTIC_PAGES_SKIP_LINK=1 npm install @theglitchking/semantic-pages
+```
+
+### Uninstalling cleanly
+
+```bash
+# 1. Remove the hook entry from .claude/settings.json (look for any SessionStart
+#    entry whose command references "semantic-pages").
+# 2. Remove the policy file:
+rm .claude/semantic-pages.json
+
+# 3. Remove the package:
+npm uninstall @theglitchking/semantic-pages
+```
+
 ---
 
 ## Common Workflows

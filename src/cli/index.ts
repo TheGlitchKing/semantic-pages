@@ -1,11 +1,30 @@
 #!/usr/bin/env node
 
 import { program } from "commander";
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
+import { registerUpdateCommands } from "@theglitchking/claude-plugin-runtime";
 
-const { version } = createRequire(import.meta.url)("../../package.json") as { version: string };
+const require_ = createRequire(import.meta.url);
+const { version } = require_("../../package.json") as { version: string };
+
+const PKG_NAME = "@theglitchking/semantic-pages";
+
+function runRelink(cwd: string) {
+  const linker = join(cwd, "node_modules", "@theglitchking", "semantic-pages", "scripts", "link-skills.js");
+  const script = existsSync(linker) ? linker : resolve(process.cwd(), "scripts", "link-skills.js");
+  if (!existsSync(script)) {
+    console.error("link-skills.js not found — is the package installed?");
+    return;
+  }
+  spawnSync(process.execPath, [script], {
+    cwd,
+    env: { ...process.env, INIT_CWD: cwd },
+    stdio: "inherit",
+  });
+}
 
 const TOOL_HELP: Record<string, { description: string; args: string; examples: string[] }> = {
   // Search
@@ -295,5 +314,12 @@ program
       readOnly: opts.readOnly,
     });
   });
+
+registerUpdateCommands(program, {
+  packageName: PKG_NAME,
+  pluginName: "semantic-pages",
+  configFile: "semantic-pages.json",
+  onAfterUpdate: (cwd) => runRelink(cwd),
+});
 
 program.parse();
